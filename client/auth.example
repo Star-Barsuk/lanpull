@@ -1,0 +1,4 @@
+# One line, mode 600, never committed:
+#   <client-name>:<password>
+# Staged by `lanpull add-client` on the server. This is the plaintext password
+# for this machine only; the server stores only its argon2 hash.

@@ -1,0 +1,11 @@
+# lanpull client configuration.
+# The client lives in one folder (~/lanpull/). `lanpull add-client` stages a
+# ready copy of this file with the values filled in; the operator normally does
+# not edit it by hand.
+
+# Server URL. Must use the IP embedded in server.crt (SAN = IP:<server-ip>).
+SERVER_URL=https://<server-ip>:8000
+
+# Directory the shared files are mirrored into. A path passed on the command
+# line overrides this.
+OUTPUT=<output-dir>
