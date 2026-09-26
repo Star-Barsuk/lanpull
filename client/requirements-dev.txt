@@ -1,0 +1,9 @@
+# Development-only Python tools for the lanpull client.
+# The client runtime uses the standard library only; nothing here is shipped.
+# Install with `make setup` (uv) or `uv pip install -r requirements-dev.txt`.
+# Versions are pinned for reproducible gates.
+
+ruff==0.16.9
+mypy==2.3.1
+pytest==9.1.1
+pip-audit==2.10.1

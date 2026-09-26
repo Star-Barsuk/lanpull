@@ -13,7 +13,7 @@ and no rollback.
 - Resumable downloads with `sha256` verification
 - Atomic replacement; partial files are never visible
 - HTTPS with a pinned self-signed certificate
-- Per-client authentication, bound to the client's address
+- Per-client authentication, optionally bound to the client's address
 - Self-updating client — no `git` or internet access required on clients
 
 ## Requirements

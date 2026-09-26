@@ -10,7 +10,7 @@ config/lanpull.clients
 docs/
 
 # --- Rust -----------------------------------------------------------------
-/target/
+target/
 **/*.rs.bk
 *.pdb
 
