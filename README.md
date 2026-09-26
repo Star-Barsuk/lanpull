@@ -12,8 +12,6 @@ version on demand, replacing changed files and removing files that no longer
 exist on the server. There is no automatic synchronization, no version history,
 and no rollback.
 
-`lanpull` is a contraction of **LAN** + **pull**.
-
 ## Table of contents
 
 - [Why lanpull](#why-lanpull)
@@ -298,15 +296,6 @@ and no git hook**; the gates are run deliberately with `make ci`.
 | Stale files are not removed | Deletion is limited to files lanpull delivered earlier; answer the prompt or use `--delete`. |
 | `ERROR: another pull is already running` | A second pull for the same destination was refused by the lock file. |
 | `make status` warns the manifest is stale | Files in the share are newer than the manifest; run `make rescan`. |
-
-## Contributing
-
-Issues and pull requests are welcome. Before opening a pull request:
-
-1. run `make -C server ci` and `make -C client ci` and make sure both pass;
-2. keep the client to the Python standard library;
-3. keep all code, comments, and documentation in English;
-4. never commit secrets, certificates, or account files.
 
 ## License
 
