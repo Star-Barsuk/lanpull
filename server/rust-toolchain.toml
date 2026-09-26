@@ -1,0 +1,11 @@
+# lanpull Rust toolchain.
+# Selects the channel and the components the quality gates need, so `make ci`
+# behaves the same on every machine. The channel tracks stable (not a fixed
+# version) to ease updates. The minimum supported Rust version (MSRV) is
+# declared separately as `rust-version` in `server/Cargo.toml`.
+
+[toolchain]
+channel = "stable"
+profile = "minimal"
+components = ["clippy", "rustfmt"]
+targets = ["x86_64-unknown-linux-musl"]

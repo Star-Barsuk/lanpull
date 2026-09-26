@@ -1,0 +1,83 @@
+# lanpull cargo-deny policy.
+# Enforced by `make deny` (`cargo deny check`).
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+[advisories]
+# Schema version 2: vulnerabilities are always denied, so only the remaining
+# categories are configured here.
+version = 2
+# Unmaintained: report only for crates we depend on directly.
+unmaintained = "workspace"
+# Unsound: report for the whole graph.
+unsound = "all"
+# A yanked crate must not stay in the lockfile.
+yanked = "deny"
+# Every exception needs a reason and a review date, for example:
+#   { id = "RUSTSEC-0000-0000", reason = "not reachable; re-check 2026-12-31" }
+ignore = []
+
+[graph]
+# Analyze the graph as the server is actually built: every feature enabled, for
+# the musl target only, so target-specific crates for other platforms are not
+# reported.
+all-features = true
+targets = ["x86_64-unknown-linux-musl"]
+
+[licenses]
+# High confidence is required when a license is inferred from license text.
+confidence-threshold = 0.93
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+[bans]
+# Duplicate versions and wildcard requirements are denied; resolve them or add
+# a justified, version-pinned `skip` entry.
+multiple-versions = "deny"
+wildcards = "deny"
+deny = [
+    # TLS is rustls only; the server never links a C TLS stack.
+    { crate = "openssl", use-instead = "rustls" },
+    { crate = "openssl-sys", use-instead = "rustls" },
+    { crate = "native-tls", use-instead = "rustls" },
+    { crate = "libssh2-sys" },
+]
+
+# Transitive duplicates we neither own nor control. Each entry is version
+# pinned so a genuinely new duplicate still fails the gate.
+[[bans.skip]]
+name = "getrandom"
+version = "=0.2.17"
+reason = "pinned by argon2/password-hash via rand_core 0.6; not controlled by this crate"
+[[bans.skip]]
+name = "getrandom"
+version = "=0.3.4"
+reason = "used by rand 0.9 via rand_core 0.9; distinct major from the argon2 chain"
+[[bans.skip]]
+name = "rand_core"
+version = "=0.6.4"
+reason = "pinned by argon2/password-hash; rand 0.9 uses rand_core 0.9"
+[[bans.skip]]
+name = "syn"
+version = "=2.0.119"
+reason = "tracing-attributes evaluates against syn 2 while newer derive crates use syn 3"
+
+[sources]
+# Dependencies may come from crates.io only: no git dependencies, no other
+# registries.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

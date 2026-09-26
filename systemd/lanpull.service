@@ -1,0 +1,37 @@
+# lanpull systemd unit.
+#
+# Installed by `make install`, which substitutes the placeholders below with
+# the operator user, the configuration path, and the state directory. The unit
+# does NOT autostart on boot and has no [Install] section: the operator starts
+# it explicitly for an update round with `make up`.
+
+[Unit]
+Description=lanpull file-distribution server
+Documentation=file://__LANPULL_CONF__
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__LANPULL_USER__
+Group=__LANPULL_USER__
+ExecStart=/usr/local/bin/lanpull serve --config __LANPULL_CONF__
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+
+# Hardening: the service needs read access to the share and write access to the
+# state directory only.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=__LANPULL_STATE_DIR__
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
