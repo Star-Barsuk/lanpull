@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -144,3 +146,81 @@ def test_sha256_file(tmp_path: Path) -> None:
     assert pull.sha256_file(path) == (
         "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
     )
+
+
+class _FakeResponse:
+    """Minimal ``HTTPResponse`` stand-in returning a fixed body in chunks."""
+
+    def __init__(self, status: int, chunks: list[bytes], headers: dict[str, str]) -> None:
+        self.status = status
+        self._chunks = list(chunks)
+        self._headers = headers
+
+    def read(self, amt: int | None = None) -> bytes:
+        """Return the next chunk, then EOF."""
+        return self._chunks.pop(0) if self._chunks else b""
+
+    def getheader(self, name: str, default: str | None = None) -> str | None:
+        """Return one response header."""
+        return self._headers.get(name, default)
+
+
+class _FakeConnection:
+    """Minimal connection whose every request yields one scripted response."""
+
+    def __init__(self, response: _FakeResponse) -> None:
+        self._response = response
+
+    def request(self, method: str, url: str, **kwargs: object) -> None:
+        """Record the request; the response is already scripted."""
+
+    def getresponse(self) -> _FakeResponse:
+        """Return the scripted response."""
+        return self._response
+
+    def close(self) -> None:
+        """No-op close."""
+
+
+class _FakeClient:
+    """Minimal ``HttpClient`` stand-in returning scripted responses in order."""
+
+    def __init__(self, responses: list[_FakeResponse]) -> None:
+        self._responses = list(responses)
+
+    def connect(self) -> _FakeConnection:
+        """Open the next scripted connection."""
+        return _FakeConnection(self._responses.pop(0))
+
+    def headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
+        """Echo the extra headers."""
+        return dict(extra or {})
+
+    @property
+    def credentials(self) -> str:
+        """Return fixed credentials."""
+        return "user:password"
+
+
+def test_fetch_entry_keeps_partial_for_resume(tmp_path: Path) -> None:
+    body = b"0123456789"
+    entry = pull.Entry("a.bin", len(body), 1.0, hashlib.sha256(body).hexdigest())
+    partials: dict[str, str] = {}
+    progress = pull.Progress(1, 1)
+
+    short = _FakeResponse(200, [body[:4]], {"ETag": '"v1"'})
+    short_client = cast("pull.HttpClient", _FakeClient([short]))
+    with pytest.raises(pull.PerFileError):
+        pull.fetch_entry(short_client, entry, tmp_path, partials, progress)
+
+    part = tmp_path / "a.bin.part"
+    assert part.read_bytes() == body[:4]
+    assert partials == {"a.bin": '"v1"'}
+
+    rest = _FakeResponse(206, [body[4:]], {"ETag": '"v1"'})
+    rest_client = cast("pull.HttpClient", _FakeClient([rest]))
+    pull.fetch_entry(rest_client, entry, tmp_path, partials, progress)
+
+    assert (tmp_path / "a.bin").read_bytes() == body
+    assert not part.exists()
+    assert partials == {}

@@ -10,6 +10,7 @@ use std::path::Path;
 use walkdir::WalkDir;
 
 use crate::arm::ArmState;
+use crate::clients::Clients;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::manifest::Manifest;
@@ -58,7 +59,17 @@ pub fn run(config: &Config) -> Result<Vec<String>> {
 
     let now = timeutil::now_unix();
     let arm = ArmState::load(&config.arm_path())?;
-    let armed = arm.armed_entries(now);
+    // Arm entries outlive a removed account; only list accounts that still exist.
+    let known = Clients::load(&config.clients_path).ok();
+    let armed: Vec<(String, i64)> = arm
+        .armed_entries(now)
+        .into_iter()
+        .filter(|(name, _)| {
+            known
+                .as_ref()
+                .is_none_or(|clients| clients.get(name).is_some())
+        })
+        .collect();
     if armed.is_empty() {
         lines.push("armed: none".to_string());
     } else {

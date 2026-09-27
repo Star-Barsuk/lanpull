@@ -13,7 +13,7 @@ MYPY       := $(BIN)/mypy
 PYTEST     := $(BIN)/pytest
 PIP_AUDIT  := $(BIN)/pip-audit
 
-.PHONY: help setup lint typecheck test audit ci
+.PHONY: help setup lint typecheck test audit clean ci
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -34,5 +34,9 @@ test: ## Run the client tests
 
 audit: ## Audit the development tools for known vulnerabilities
 	$(PIP_AUDIT) -r requirements-dev.txt
+
+clean: ## Remove the virtual environment and Python caches
+	rm -rf $(VENV) __pycache__ .pytest_cache .mypy_cache .ruff_cache
+	find . -name '*.pyc' -delete
 
 ci: lint typecheck test audit ## Run every client quality and security gate

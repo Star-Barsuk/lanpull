@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote, urlsplit
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 SCHEME = "whole-file-v1"
 FILE_PREFIX = "/_lanpull/file/"
@@ -509,6 +509,17 @@ def fetch_entry(
     """Download, verify, and atomically replace one file."""
     part = output / (entry.path + ".part")
     download(client, entry, output, partials, progress)
+
+    staged = part.stat().st_size if part.is_file() else 0
+    if staged != entry.size:
+        # The connection ended before the whole file arrived (for example the
+        # server was stopped or the link dropped without raising). Keep the
+        # partial and its validator so the next run resumes with Range/If-Range;
+        # deleting them here would force a full re-download.
+        raise PerFileError(
+            f"ERROR: {entry.path}: incomplete ({staged} of {entry.size} bytes); re-run to resume"
+        )
+
     if sha256_file(part) != entry.sha256:
         part.unlink(missing_ok=True)
         partials.pop(entry.path, None)

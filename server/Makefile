@@ -8,20 +8,29 @@
 SHELL := /bin/sh
 
 LANPULL_CONF ?= ../config/lanpull.conf
+LANPULL_CONF_ABS := $(abspath $(LANPULL_CONF))
 -include $(LANPULL_CONF)
 
 BIN_DIR    ?= /usr/local/bin
 LANPULL    ?= $(BIN_DIR)/lanpull
 UNIT       ?= /etc/systemd/system/lanpull.service
 LANPULL_USER ?= $(shell id -un)
+LANPULL_CLIENTS ?= ../config/lanpull.clients
 CARGO      ?= cargo
 TARGET     ?= x86_64-unknown-linux-musl
 CLIENT_DIR ?= ../client
 STATE_DIR  ?= /var/lib/lanpull
+STATE_DIR_ABS := $(abspath $(STATE_DIR))
 TOOLS      ?= cargo-audit cargo-deny cargo-geiger cargo-auditable
 
-.PHONY: help deps tools build install up down restart status rescan add-client remove-client \
-        list-clients passwd arm disarm report cert client-bundle logs clean \
+# Destructive targets (distclean, uninstall, wipe) refuse to run unless the
+# operator passes CONFIRM=1. The SHARE=1 flag additionally removes $SHARE_DIR.
+CONFIRM ?=
+SHARE   ?=
+
+.PHONY: help deps build install up down restart status rescan add-client remove-client \
+        list-clients passwd arm disarm report cert client-bundle logs clean config \
+        distclean uninstall wipe confirm \
         fmt fmt-check lint doc test deny audit audit-bin geiger security ci
 
 help: ## Show available targets
@@ -38,8 +47,8 @@ install: build ## Install the binary, the systemd unit, and stage the client bun
 	install -Dm755 target/$(TARGET)/release/lanpull $(LANPULL)
 	install -Dm644 ../systemd/lanpull.service $(UNIT)
 	sed -i -e 's|__LANPULL_USER__|$(LANPULL_USER)|g' \
-	       -e 's|__LANPULL_CONF__|$(LANPULL_CONF)|g' \
-	       -e 's|__LANPULL_STATE_DIR__|$(STATE_DIR)|g' $(UNIT)
+	       -e 's|__LANPULL_CONF__|$(LANPULL_CONF_ABS)|g' \
+	       -e 's|__LANPULL_STATE_DIR__|$(STATE_DIR_ABS)|g' $(UNIT)
 	$(MAKE) client-bundle
 
 up: ## Start the service (no autostart)
@@ -88,8 +97,45 @@ client-bundle: ## Stage client/ into $STATE_DIR/client
 logs: ## Follow the service log
 	journalctl -u lanpull.service -f
 
-clean: ## Remove build artifacts
+clean: ## Remove build artifacts and caches (server target and client venv)
 	$(CARGO) clean
+	$(MAKE) -C $(CLIENT_DIR) clean
+
+confirm: ## Refuse a destructive target unless CONFIRM=1 is given
+	@if [ "$(CONFIRM)" != "1" ]; then \
+		echo "lanpull: this target deletes configuration, credentials, and/or state."; \
+		echo "         re-run with CONFIRM=1 to proceed (SHARE=1 also removes SHARE_DIR)."; \
+		exit 1; \
+	fi
+
+config: ## Generate config/lanpull.conf for this machine
+	scripts/init-config.sh --config $(LANPULL_CONF)
+
+distclean: confirm ## Remove build artifacts, generated config, and accounts (CONFIRM=1)
+	$(MAKE) clean
+	rm -f $(LANPULL_CONF) $(LANPULL_CLIENTS)
+	find .. -path ../.git -prune -o -path ../target -prune \
+		-o -path ../server/target -prune -o -path ../client/.venv -prune \
+		-o -type f \( -name '.lanpull.lock' -o -name 'state.json' \
+		-o -name '*.part' -o -name '.manifest.tmp' \) \
+		-print -exec rm -f {} +
+
+uninstall: confirm ## Remove the installed binary, unit, and state (CONFIRM=1, SHARE=1)
+	@[ -n "$(STATE_DIR)" ] && [ "$(STATE_DIR)" != "/" ] \
+		|| { echo "lanpull: refusing to remove STATE_DIR='$(STATE_DIR)'"; exit 1; }
+	-systemctl stop lanpull.service
+	-systemctl disable lanpull.service
+	-rm -f $(UNIT)
+	-systemctl daemon-reload
+	rm -f $(LANPULL)
+	rm -rf $(STATE_DIR)
+	@if [ "$(SHARE)" = "1" ]; then \
+		[ -n "$(SHARE_DIR)" ] && [ "$(SHARE_DIR)" != "/" ] \
+			|| { echo "lanpull: refusing to remove SHARE_DIR='$(SHARE_DIR)'"; exit 1; }; \
+		echo "removing $(SHARE_DIR)"; rm -rf $(SHARE_DIR); \
+	fi
+
+wipe: distclean uninstall ## Remove everything lanpull created (CONFIRM=1, SHARE=1)
 
 fmt: ## Format Rust sources
 	$(CARGO) fmt --all

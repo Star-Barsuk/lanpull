@@ -19,6 +19,7 @@ and no rollback.
 - [How it works](#how-it-works)
 - [Requirements](#requirements)
 - [Installation](#installation)
+- [Teardown](#teardown)
 - [Client usage](#client-usage)
 - [Configuration](#configuration)
 - [Security model](#security-model)
@@ -125,8 +126,8 @@ Directory listing is disabled and there is no browser UI.
 ```bash
 git clone <repo> lanpull
 cd lanpull
-cp config/lanpull.conf.example config/lanpull.conf
-$EDITOR config/lanpull.conf
+make config      # generate config/lanpull.conf for this machine (prompts)
+# or: cp config/lanpull.conf.example config/lanpull.conf && $EDITOR config/lanpull.conf
 
 make deps        # Rust target and the quality-gate tooling
 make build       # static binary (x86_64-unknown-linux-musl)
@@ -135,6 +136,11 @@ make cert        # self-signed certificate (SAN = IP:<server-ip>)
 make rescan      # generate the manifest from <share-dir>
 make up          # start the service (no autostart on boot)
 ```
+
+`make config` derives `SERVER_IP` from the main routing table, so it ignores
+proxy/tunnel addresses and never names an interface, then writes the file mode
+600 and creates the directories. It needs `sudo` to create `STATE_DIR` outside
+your home.
 
 The order matters: the certificate must exist before clients are registered
 (it is included in the staged client folder), and a manifest must exist before
@@ -162,6 +168,23 @@ Copy the staged folder to the machine once, then drive it from the terminal:
 ./pull.py --dry-run      # show the plan; change nothing
 ./pull.py --self-update  # refresh pull.py from the server (asks to confirm)
 ```
+
+## Teardown
+
+The removal levels are cumulative, and the destructive ones require `CONFIRM=1`:
+
+```bash
+make clean                    # build artifacts and caches only (no root)
+make distclean CONFIRM=1      # clean + config/lanpull.conf + config/lanpull.clients
+sudo make uninstall CONFIRM=1 # binary, systemd unit, and $STATE_DIR
+sudo make uninstall CONFIRM=1 SHARE=1   # also removes SHARE_DIR
+sudo make wipe CONFIRM=1      # distclean + uninstall: everything lanpull created
+```
+
+`uninstall` removes `$STATE_DIR` (manifest, TLS material, arm state, audit log,
+staged bundle); `SHARE=1` additionally removes the distributed files, so use it
+only when the share holds nothing you need. The systemd journal is left alone.
+Client folders are on remote machines and must be removed there by hand.
 
 ## Client usage
 
@@ -225,6 +248,19 @@ OUTPUT=<output-dir>
 ```
 
 `SERVER_URL` must use the IP embedded in `server.crt` (`SAN = IP:<server-ip>`).
+
+`OUTPUT` is the local mirror directory on the client machine; it is chosen by
+the operator when the client is created (`make add-client … OUTPUT=<output-dir>`)
+and written into the staged `lanpull.conf`. A path passed to `pull.py` on the
+command line overrides it:
+
+```bash
+./pull.py /path/to/mirror
+```
+
+There is no default: if neither the argument nor `OUTPUT` is set, `pull.py`
+fails. This is separate from the server's `SHARE_DIR`, which is the source the
+manifest is built from and is never written by a pull.
 
 ## Security model
 

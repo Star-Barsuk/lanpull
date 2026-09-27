@@ -1,6 +1,8 @@
 # lanpull server configuration.
-# Copy to config/lanpull.conf and adjust. The real file is not committed and
-# must be readable only by its owner (mode 600).
+# Generate the real file with `make config` (it fills in this machine's
+# values), or copy this template to config/lanpull.conf and adjust by hand.
+# The real file is not committed and must be readable only by its owner
+# (mode 600).
 
 # Directory holding the files to distribute. Can be any path, outside the
 # project. The manifest is NOT written here; it lives under STATE_DIR.
