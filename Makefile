@@ -5,10 +5,10 @@
 
 SHELL := /bin/sh
 
-SERVER_TARGETS := deps build install up down restart status rescan \
+SERVER_TARGETS := deps build install install-system up down restart status rescan \
                   add-client remove-client list-clients passwd arm disarm \
                   report cert client-bundle logs clean config distclean \
-                  uninstall wipe \
+                  uninstall wipe wipe-system \
                   fmt fmt-check lint doc test deny audit audit-bin geiger security
 
 CLIENT_TARGETS := client-lint client-typecheck client-test client-audit

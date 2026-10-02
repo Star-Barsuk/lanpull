@@ -131,7 +131,7 @@ make config      # generate config/lanpull.conf for this machine (prompts)
 
 make deps        # Rust target and the quality-gate tooling
 make build       # static binary (x86_64-unknown-linux-musl)
-make install     # install the binary, the unit, and the client bundle
+make install-system  # install the binary, the unit, and the client bundle (handles sudo itself)
 make cert        # self-signed certificate (SAN = IP:<server-ip>)
 make rescan      # generate the manifest from <share-dir>
 make up          # start the service (no autostart on boot)
@@ -179,6 +179,7 @@ make distclean CONFIRM=1      # clean + config/lanpull.conf + config/lanpull.cli
 sudo make uninstall CONFIRM=1 # binary, systemd unit, and $STATE_DIR
 sudo make uninstall CONFIRM=1 SHARE=1   # also removes SHARE_DIR
 sudo make wipe CONFIRM=1      # distclean + uninstall: everything lanpull created
+make wipe-system CONFIRM=1  # same as wipe, but runs the system part via sudo itself
 ```
 
 `uninstall` removes `$STATE_DIR` (manifest, TLS material, arm state, audit log,

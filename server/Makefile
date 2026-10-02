@@ -14,7 +14,10 @@ LANPULL_CONF_ABS := $(abspath $(LANPULL_CONF))
 BIN_DIR    ?= /usr/local/bin
 LANPULL    ?= $(BIN_DIR)/lanpull
 UNIT       ?= /etc/systemd/system/lanpull.service
-LANPULL_USER ?= $(shell id -un)
+LANPULL_USER ?= $(if $(SUDO_USER),$(SUDO_USER),$(shell id -un))
+# Human operator behind sudo (SUDO_USER when root via sudo, else current user).
+OPERATOR ?= $(if $(SUDO_USER),$(SUDO_USER),$(shell id -un))
+OPERATOR_HOME ?= $(or $(shell getent passwd $(OPERATOR) 2>/dev/null | cut -d: -f6),$(HOME))
 LANPULL_CLIENTS ?= ../config/lanpull.clients
 CARGO      ?= cargo
 TARGET     ?= x86_64-unknown-linux-musl
@@ -28,9 +31,9 @@ TOOLS      ?= cargo-audit cargo-deny cargo-geiger cargo-auditable
 CONFIRM ?=
 SHARE   ?=
 
-.PHONY: help deps build install up down restart status rescan add-client remove-client \
-        list-clients passwd arm disarm report cert client-bundle logs clean config \
-        distclean uninstall wipe confirm \
+.PHONY: help deps build install install-system up down restart status rescan add-client \
+        remove-client list-clients passwd arm disarm report cert client-bundle logs clean \
+        config distclean uninstall wipe wipe-system confirm \
         fmt fmt-check lint doc test deny audit audit-bin geiger security ci
 
 help: ## Show available targets
@@ -50,6 +53,17 @@ install: build ## Install the binary, the systemd unit, and stage the client bun
 	       -e 's|__LANPULL_CONF__|$(LANPULL_CONF_ABS)|g' \
 	       -e 's|__LANPULL_STATE_DIR__|$(STATE_DIR_ABS)|g' $(UNIT)
 	$(MAKE) client-bundle
+
+install-system: ## Install as root, preserving cargo PATH and the operator user (run without sudo)
+	if [ "$$(id -u)" = "0" ]; then \
+		[ -n "$(STATE_DIR)" ] && [ "$(STATE_DIR)" != "/" ] \
+			|| { echo "lanpull: refusing to touch STATE_DIR='$(STATE_DIR)'"; exit 1; }; \
+		$(MAKE) install; \
+		chown -R "$(OPERATOR):$$(id -gn $(OPERATOR))" "$(STATE_DIR)"; \
+		systemctl daemon-reload; \
+	else \
+		exec sudo env PATH="$(OPERATOR_HOME)/.cargo/bin:$$PATH" $(MAKE) $@; \
+	fi
 
 up: ## Start the service (no autostart)
 	systemctl start lanpull.service
@@ -136,6 +150,9 @@ uninstall: confirm ## Remove the installed binary, unit, and state (CONFIRM=1, S
 	fi
 
 wipe: distclean uninstall ## Remove everything lanpull created (CONFIRM=1, SHARE=1)
+wipe-system: confirm ## Remove everything lanpull created, handling sudo itself (CONFIRM=1, SHARE=1)
+	$(MAKE) distclean CONFIRM=1
+	sudo $(MAKE) uninstall CONFIRM=1 STATE_DIR="$(STATE_DIR)" SHARE="$(SHARE)"
 
 fmt: ## Format Rust sources
 	$(CARGO) fmt --all
