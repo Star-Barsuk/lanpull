@@ -262,7 +262,7 @@ fn audit_report_aggregates() {
             ip: "10.0.0.5".to_string(),
             host: "client-a".to_string(),
             method: "GET".to_string(),
-            path: "/_lanpull/file/a.txt".to_string(),
+            path: "/_lanpull/share/reports/file/a.txt".to_string(),
             status: 200,
             bytes: 100,
             reason: None,

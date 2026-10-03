@@ -11,8 +11,15 @@ use serde::{Deserialize, Serialize};
 use crate::error::Result;
 use crate::timeutil;
 
-/// The path prefix of data file downloads.
-const FILE_PREFIX: &str = "/_lanpull/file/";
+/// The path prefix shared by every share-scoped route.
+const SHARE_PREFIX: &str = "/_lanpull/share/";
+/// The marker that separates a share from its file path.
+const FILE_MARKER: &str = "/file/";
+
+/// Return `true` for a share data-file download (`/_lanpull/share/<share>/file/<path>`).
+fn is_data_file(path: &str) -> bool {
+    path.starts_with(SHARE_PREFIX) && path.contains(FILE_MARKER)
+}
 
 /// One audit log record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,9 +167,7 @@ pub fn summarize(
 
         if record.reason.is_some() || record.status == 401 {
             summary.rejected = summary.rejected.saturating_add(1);
-        } else if (record.status == 200 || record.status == 206)
-            && record.path.starts_with(FILE_PREFIX)
-        {
+        } else if (record.status == 200 || record.status == 206) && is_data_file(&record.path) {
             summary.files = summary.files.saturating_add(1);
             summary.bytes = summary.bytes.saturating_add(record.bytes);
         }
