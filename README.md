@@ -26,7 +26,6 @@ and no rollback.
 - [Repository layout](#repository-layout)
 - [Development](#development)
 - [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
 - [License](#license)
 
 ## Why lanpull
@@ -72,39 +71,43 @@ small pull-only mirror for a trusted local network.
 ```text
          Owner's PC (server, full admin, Linux)
          ---------------------------------------
-         $SHARE_DIR/                files to distribute (any path)
+         $SHARE_<name>/             one dir per share (any path)
          lanpull (single Rust binary)
-           serve        HTTPS on $BIND:$PORT, per-client auth + arm, Range
-           manifest     regenerate $STATE_DIR/manifest.json atomically
-           add-client   create an account + stage a ready client folder
+           serve        HTTPS on $BIND:$PORT, auth + arm + access mapping, Range
+           manifest     regenerate per-share and per-account manifests
+           add-client   create an account + rules + stage a ready client folder
+           grant/revoke add/remove an account's access rules
            arm/disarm   authorize a client for a short window
            report       who pulled what (from the audit log)
-           cert         self-signed certificate (SAN = IP:$SERVER_IP)
-           status       warn on a stale manifest / symlinks / armed clients
+           cert         self-signed certificate (SAN = IPs + localhost)
+           status       warn on stale manifests / symlinks / rules
          config/lanpull.clients     accounts (argon2, mode 600)
-         $STATE_DIR/                manifest, cache, TLS material, log
+         config/lanpull.access      per-client rules (mode 600)
+         $STATE_DIR/                manifests, caches, TLS material, log
                      |
                      |  HTTPS GET (Range, HTTP Basic), LAN only
                      v
          Client (Astra Linux, no sudo, Wi-Fi)
          ------------------------------------
-         <client-folder>/lanpull.conf   SERVER_URL, OUTPUT
+         <client-folder>/lanpull.conf   SERVER_URL, MIRROR_<share> per share
          <client-folder>/auth            user:password (mode 600)
          <client-folder>/server.crt      pinned public certificate
          <client-folder>/pull.py         standard-library pull client
-         <client-folder>/state.json      paths lanpull delivered
+         <client-folder>/state.json      delivered paths, keyed by share
 ```
 
-The server exposes exactly four routes under the reserved `_lanpull/` prefix:
+The server exposes share-scoped routes plus the global client bundle, under the
+reserved `_lanpull/` prefix:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET`/`HEAD` | `/_lanpull/manifest.json` | Data manifest (small, always fetched in full). |
-| `GET`/`HEAD` | `/_lanpull/file/<path>` | Raw file bytes, with `Range` support. |
+| `GET`/`HEAD` | `/_lanpull/share/<share>/manifest.json` | That account's filtered manifest for the share. |
+| `GET`/`HEAD` | `/_lanpull/share/<share>/file/<path>` | Raw file bytes, with `Range` support. |
 | `GET`/`HEAD` | `/_lanpull/client/manifest.json` | Client bundle manifest (`version`, sizes, hashes). |
 | `GET`/`HEAD` | `/_lanpull/client/<file>` | Client bundle bytes (`pull.py`, `VERSION`). |
 
-Directory listing is disabled and there is no browser UI.
+Directory listing is disabled and there is no browser UI. An account sees only
+the shares and paths it is granted; anything else is `403`.
 
 ## Requirements
 
@@ -129,9 +132,9 @@ cd lanpull
 make config      # generate config/lanpull.conf for this machine (prompts)
 # or: cp config/lanpull.conf.example config/lanpull.conf && $EDITOR config/lanpull.conf
 
-make deps        # Rust target and the quality-gate tooling
+make setup       # Rust target and the quality-gate tooling
 make build       # static binary (x86_64-unknown-linux-musl)
-make install-system  # install the binary, the unit, and the client bundle (handles sudo itself)
+make install     # install the binary, the unit, and the client bundle (escalates as needed)
 make cert        # self-signed certificate (SAN = IP:<server-ip>)
 make rescan      # generate the manifest from <share-dir>
 make up          # start the service (no autostart on boot)
@@ -149,14 +152,17 @@ the first pull. The server refuses to start without accounts and a certificate.
 ### Register a client (once per machine)
 
 ```bash
-make add-client NAME=<client-name> [IP=<client-ip>] OUTPUT=<output-dir>
+make add-client NAME=<client-name> [IP=<client-ip>] OUTPUT=<output-dir> SHARE=<share>[:<glob>]
 ```
 
 This generates a random password, stores only its argon2 hash in
-`config/lanpull.clients`, and stages a ready-to-copy folder (`pull.py`,
-`lanpull.conf`, `auth`, `server.crt`). Copy that folder to the client machine
-into a single directory of your choice — for example `~/lanpull/`. Omitting
-`IP` leaves the account usable from any address on the LAN.
+`config/lanpull.clients`, records the access rules in `config/lanpull.access`,
+and stages a ready-to-copy folder (`pull.py`, `lanpull.conf`, `auth`,
+`server.crt`). Copy that folder to the client machine into a single directory of
+your choice — for example `~/lanpull/`. Omitting `IP` leaves the account usable
+from any address on the LAN. Repeat `SHARE=` for several rules, or use
+`SHARE='*'` to grant every share. Use `make grant`/`make revoke` to change the
+scope later.
 
 ### Client
 
@@ -174,18 +180,25 @@ Copy the staged folder to the machine once, then drive it from the terminal:
 The removal levels are cumulative, and the destructive ones require `CONFIRM=1`:
 
 ```bash
-make clean                    # build artifacts and caches only (no root)
-make distclean CONFIRM=1      # clean + config/lanpull.conf + config/lanpull.clients
-sudo make uninstall CONFIRM=1 # binary, systemd unit, and $STATE_DIR
-sudo make uninstall CONFIRM=1 SHARE=1   # also removes SHARE_DIR
-sudo make wipe CONFIRM=1      # distclean + uninstall: everything lanpull created
-make wipe-system CONFIRM=1  # same as wipe, but runs the system part via sudo itself
+make clean                      # build artifacts and caches only (no root)
+make distclean CONFIRM=1        # clean + config/lanpull.conf + config/lanpull.clients
+make uninstall CONFIRM=1        # binary, systemd unit, and $STATE_DIR
+make uninstall CONFIRM=1 SHARE=1   # also removes every share directory
+make wipe CONFIRM=1             # distclean + uninstall: everything lanpull created
+make wipe CONFIRM=1 SHARE=1     # ...including the distributed files
 ```
+
+Each target escalates only the steps that need root, so no `sudo` prefix is
+required on the command line; run them without `sudo`.
 
 `uninstall` removes `$STATE_DIR` (manifest, TLS material, arm state, audit log,
 staged bundle); `SHARE=1` additionally removes the distributed files, so use it
-only when the share holds nothing you need. The systemd journal is left alone.
-Client folders are on remote machines and must be removed there by hand.
+only when the share holds nothing you need.
+
+Together these targets erase every artifact lanpull itself created on the
+server, at any stage after the service has been stopped. The gate tools that
+`make setup` installs, the systemd journal, and client folders on remote
+machines are not lanpull artifacts, so they are left in place.
 
 ## Client usage
 
@@ -198,14 +211,14 @@ Client folders are on remote machines and must be removed there by hand.
 | `pull.py --self-update` | Compare versions and replace `pull.py` from the served bundle. | `0` current/declined/updated, `2` fatal |
 | `pull.py --version` | Print the client version. | `0` |
 
-A path argument overrides `OUTPUT`:
+A positional argument limits the run to one configured share:
 
 ```bash
-./pull.py /path/to/mirror
+./pull.py reports
 ```
 
 `--check`, `--dry-run`, `--delete`, and `--self-update` may be combined with a
-path where it makes sense. Deletion is limited to files lanpull itself
+share where it makes sense. Deletion is limited to files lanpull itself
 delivered earlier, recorded in `state.json`; files you created in the mirror
 folder are never touched.
 
@@ -215,69 +228,90 @@ folder are never touched.
 
 | Key | Meaning | Example |
 | --- | --- | --- |
-| `SHARE_DIR` | Directory whose contents are distributed. | `/srv/lanpull/share` |
-| `STATE_DIR` | Manifest, cache, TLS material, arm state, audit log (outside the share). | `/var/lib/lanpull` |
+| `SHARE_<name>` | A named share (one key per share; the name matches `^[a-z0-9][a-z0-9_-]*$`). | `SHARE_reports=/srv/lanpull/reports` |
+| `STATE_DIR` | Manifests, caches, TLS material, arm state, audit log (outside the shares). | `/var/lib/lanpull` |
 | `BIND` | Listen address. | `0.0.0.0` |
 | `PORT` | Listen port. | `8000` |
 | `SERVER_IP` | Address clients use; embedded in the certificate SAN. | `<server-ip>` |
 | `CERT_PATH` | PEM certificate path. | `/var/lib/lanpull/server.crt` |
 | `KEY_PATH` | PEM private key path (mode 600). | `/var/lib/lanpull/server.key` |
 | `CLIENTS_PATH` | Account file. Relative paths resolve against the config file. | `lanpull.clients` |
+| `ACCESS_PATH` | Access-mapping file. Relative paths resolve against the config file. | `lanpull.access` |
 | `AUDIT_LOG` | JSON-lines audit log. | `/var/lib/lanpull/access.log` |
 
 The real file is mode 600 and is never committed. Blank lines and `#` comments
 are ignored, values may be quoted, and `$NAME`/`${NAME}` environment
-references are expanded.
+references are expanded. At least one `SHARE_<name>` key is required.
 
 ### Accounts — `config/lanpull.clients`
 
 One line per machine:
 
 ```text
-<client-name>:$argon2$...[:<client-ip>]
+<client-name>:$argon2$...[:<client-ip>][:local]
 ```
 
 The optional third field binds the account to a source IP; omit it (or use
-`*`) to accept any address on the LAN. Managed with `make add-client`,
+`*`) to accept any address on the LAN. The `local` field marks a self-share
+account, exempt from the arming window. Managed with `make add-client`,
 `make remove-client`, and `make passwd`; never committed.
+
+### Access rules — `config/lanpull.access`
+
+One rule per line:
+
+```text
+<client-name> <share>[:<glob>]
+```
+
+`<share>` is a share name or `*` (every share); `<glob>` is share-relative
+(`*` within a segment, `**` across segments). Default is deny. Managed with
+`make add-client --share`/`make grant`/`make revoke`; never committed.
 
 ### Client — `<client-folder>/lanpull.conf`
 
 ```text
 SERVER_URL=https://<server-ip>:8000
-OUTPUT=<output-dir>
+MIRROR_reports=<output-dir>
+MIRROR_media=<other-output-dir>
 ```
 
-`SERVER_URL` must use the IP embedded in `server.crt` (`SAN = IP:<server-ip>`).
+`SERVER_URL` must use the IP embedded in `server.crt` (the SAN includes
+`<server-ip>`, `127.0.0.1`, and `localhost`).
 
-`OUTPUT` is the local mirror directory on the client machine; it is chosen by
-the operator when the client is created (`make add-client … OUTPUT=<output-dir>`)
-and written into the staged `lanpull.conf`. A path passed to `pull.py` on the
-command line overrides it:
+Each `MIRROR_<share>` maps a share to a local mirror directory; the operator
+chooses the base with `make add-client … OUTPUT=<output-dir>`, and the staged
+file maps each granted share to a subdirectory. A positional argument selects a
+single share:
 
 ```bash
-./pull.py /path/to/mirror
+./pull.py reports
 ```
 
-There is no default: if neither the argument nor `OUTPUT` is set, `pull.py`
-fails. This is separate from the server's `SHARE_DIR`, which is the source the
-manifest is built from and is never written by a pull.
+There is no default: if there is no `MIRROR_<share>` entry, `pull.py` fails.
+This is separate from the server's share directories, which are the sources the
+manifests are built from and are never written by a pull.
 
 ## Security model
 
-Access to the share is controlled by three per-request checks:
+Access is controlled by four per-request checks:
 
 1. a per-client account password (argon2, verified in constant time);
 2. if the account has a registered IP, the request must come from it;
-3. the account must be armed by the operator for the current window.
+3. the account must be armed by the operator for the current window (a `local`
+   self-share account is exempt);
+4. the requested share and path must be allowed by the account's access rules.
 
 For an IP-bound account these checks stop a copied client folder from being
-used on another machine to bulk-download the share. For an account without an
-IP binding, the `arm` window is the only barrier. Every request is logged, and
-`lanpull report` shows who pulled what and any rejected attempts.
+used on another machine to bulk-download a share. For an account without an
+IP binding, the `arm` window is the only barrier on the network side, while the
+access mapping limits what any account can see at all (a `403` otherwise).
+Every request is logged, and `lanpull report` shows who pulled what and any
+rejected attempts.
 
 **What this does not do.** It does not protect data already mirrored on a
-compromised client: anyone with access to that machine can copy `OUTPUT`.
+compromised client: anyone with access to that machine can copy the mirror
+directories.
 Credentials live in files and are never copy-proof, and a determined attacker
 on the same subnet could steal a registered IP — or use an unbound account —
 during the short `arm` window. The client hostname (`X-Lanpull-Host`) is
@@ -293,7 +327,7 @@ client/     # Python client, config examples, and Python tooling
 server/     # Rust crate and Rust tooling
 config/     # server configuration examples
 systemd/    # service unit
-Makefile    # thin forwarder to server/ and client/
+Makefile    # thin pattern forwarder to server/ and client/
 ```
 
 `client/` and `server/` can be checked out independently with
@@ -310,10 +344,14 @@ make -C client ci    # ruff check/format, mypy --strict, pytest, pip-audit
 make -C server ci && make -C client ci
 ```
 
-The client tooling lives in a uv-managed virtual environment:
+The gates locate their tools themselves: the server Makefile finds the Rust
+toolchain in `$CARGO_HOME/bin` (no `PATH` edit needed), and the client gates
+create their uv-managed `.venv` on first run. `make setup` installs the Rust
+target and the gate tools.
 
 ```bash
-make -C client setup   # create client/.venv and install pinned tools
+make setup            # install the Rust target and the gate tools
+make -C client setup  # create client/.venv and install pinned tools
 ```
 
 Quality and security rules are machine-checkable and live in the configuration
