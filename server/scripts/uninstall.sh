@@ -15,7 +15,7 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 binary=""
 unit=""
 state_dir=""
-share_dir=""
+shares_file=""
 share="0"
 service="lanpull.service"
 
@@ -24,7 +24,7 @@ while [ "$#" -gt 0 ]; do
         --binary) binary=$2; shift 2 ;;
         --unit) unit=$2; shift 2 ;;
         --state-dir) state_dir=$2; shift 2 ;;
-        --share-dir) share_dir=$2; shift 2 ;;
+        --shares-file) shares_file=$2; shift 2 ;;
         --share) share=$2; shift 2 ;;
         --service) service=$2; shift 2 ;;
         *) die "uninstall: unknown argument: $1" ;;
@@ -49,9 +49,14 @@ run_root rm -rf "$state_dir"
 echo "removed: $state_dir"
 
 if [ "$share" = "1" ]; then
-    require_safe_path "$share_dir" SHARE_DIR
-    run_root rm -rf "$share_dir"
-    echo "removed: $share_dir"
+    [ -n "$shares_file" ] && [ -f "$shares_file" ] \
+        || die "uninstall: --shares-file is required with --share 1"
+    while IFS= read -r share_dir || [ -n "$share_dir" ]; do
+        [ -n "$share_dir" ] || continue
+        require_safe_path "$share_dir" SHARE_DIR
+        run_root rm -rf "$share_dir"
+        echo "removed: $share_dir"
+    done <"$shares_file"
 fi
 
 echo "uninstalled: binary, unit, and state"

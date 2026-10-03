@@ -32,7 +32,7 @@ LANPULL_CLIENTS ?= ../config/lanpull.clients
 CLIENT_DIR     ?= ../client
 STATE_DIR      ?= /var/lib/lanpull
 STATE_DIR_ABS  := $(abspath $(STATE_DIR))
-SHARE_DIR_ABS  := $(if $(SHARE_DIR),$(abspath $(SHARE_DIR)),)
+SHARES_FILE    ?= $(LANPULL_CONF_ABS).shares
 
 CONFIRM ?=
 SHARE   ?=
@@ -40,8 +40,10 @@ SHARE   ?=
 SCRIPTS := scripts
 CONFIG_ARGS ?=
 
+# The share list is materialized before any removal, because `wipe` deletes the
+# configuration (and so the share definitions) before `uninstall` runs.
 UNINSTALL_CMD = $(SCRIPTS)/uninstall.sh --binary "$(LANPULL)" --unit "$(UNIT)" \
-	--state-dir "$(STATE_DIR_ABS)" --share-dir "$(SHARE_DIR_ABS)" \
+	--state-dir "$(STATE_DIR_ABS)" --shares-file "$(SHARES_FILE)" \
 	--share "$(SHARE)" --service "$(SERVICE)"
 
 .PHONY: help setup build config client-bundle install uninstall wipe \
@@ -76,11 +78,19 @@ install: build ## Install the binary, unit, and client bundle (escalates as need
 		--client-dir "$(CLIENT_DIR)"
 
 uninstall: confirm ## Remove the binary, unit, and state (CONFIRM=1, SHARE=1)
+	@if [ "$(SHARE)" = "1" ]; then \
+		$(SCRIPTS)/shares.sh "$(LANPULL_CONF_ABS)" >"$(SHARES_FILE)" || exit 1; \
+	fi
 	$(UNINSTALL_CMD)
+	@rm -f "$(SHARES_FILE)"
 
 wipe: confirm ## Remove everything lanpull created (CONFIRM=1, SHARE=1)
+	@if [ "$(SHARE)" = "1" ]; then \
+		$(SCRIPTS)/shares.sh "$(LANPULL_CONF_ABS)" >"$(SHARES_FILE)" || exit 1; \
+	fi
 	$(MAKE) distclean CONFIRM=1
 	$(UNINSTALL_CMD)
+	@rm -f "$(SHARES_FILE)"
 
 up: ## Start the service (no autostart)
 	$(SCRIPTS)/service.sh start $(SERVICE)
