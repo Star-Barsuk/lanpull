@@ -75,14 +75,14 @@ small pull-only mirror for a trusted local network.
          lanpull (single Rust binary)
            serve        HTTPS on $BIND:$PORT, auth + arm + access mapping, Range
            manifest     regenerate per-share and per-account manifests
-           add-client   create an account + rules + stage a ready client folder
-           grant/revoke add/remove an account's access rules
+           add-client   create an account + stage a ready client folder
+           access       manage the JSON policy (public set + per-client deltas)
            arm/disarm   authorize a client for a short window
            report       who pulled what (from the audit log)
            cert         self-signed certificate (SAN = IPs + localhost)
-           status       warn on stale manifests / symlinks / rules
+           status       warn on stale manifests / symlinks / policy
          config/lanpull.clients     accounts (argon2, mode 600)
-         config/lanpull.access      per-client rules (mode 600)
+         config/lanpull.access.json access policy (mode 600)
          $STATE_DIR/                manifests, caches, TLS material, log
                      |
                      |  HTTPS GET (Range, HTTP Basic), LAN only
@@ -151,18 +151,32 @@ the first pull. The server refuses to start without accounts and a certificate.
 
 ### Register a client (once per machine)
 
+Grant access in the policy, then create the account:
+
 ```bash
-make add-client NAME=<client-name> [IP=<client-ip>] OUTPUT=<output-dir> SHARE=<share>[:<glob>]
+# a file visible to every account, and a file only for one client
+lanpull access public add <share>:<path>
+lanpull access client add <client-name> <share>:<path>
+
+# create the account and stage a ready-to-copy folder
+lanpull add-client <client-name> [--ip <client-ip>] --output <output-dir>
 ```
 
-This generates a random password, stores only its argon2 hash in
-`config/lanpull.clients`, records the access rules in `config/lanpull.access`,
-and stages a ready-to-copy folder (`pull.py`, `lanpull.conf`, `auth`,
-`server.crt`). Copy that folder to the client machine into a single directory of
-your choice — for example `~/lanpull/`. Omitting `IP` leaves the account usable
-from any address on the LAN. Repeat `SHARE=` for several rules, or use
-`SHARE='*'` to grant every share. Use `make grant`/`make revoke` to change the
-scope later.
+`add-client` generates a random password, stores only its argon2 hash in
+`config/lanpull.clients`, and stages a folder (`pull.py`, `lanpull.conf`,
+`auth`, `server.crt`) with one `MIRROR_<share>` line per share the account can
+see. Copy that folder to the client machine into a single directory of your
+choice — for example `~/lanpull/`. Omitting `--ip` leaves the account usable
+from any address on the LAN. Changing the scope later is a `lanpull access`
+command; the operator no longer edits rules per client.
+
+The `make` wrapper forwards an argument string:
+
+```bash
+make access ARGS='public add <share>:<path>'
+make access ARGS='client add <client-name> <share>:<path>'
+make access ARGS='client list'
+```
 
 ### Client
 
@@ -236,7 +250,7 @@ folder are never touched.
 | `CERT_PATH` | PEM certificate path. | `/var/lib/lanpull/server.crt` |
 | `KEY_PATH` | PEM private key path (mode 600). | `/var/lib/lanpull/server.key` |
 | `CLIENTS_PATH` | Account file. Relative paths resolve against the config file. | `lanpull.clients` |
-| `ACCESS_PATH` | Access-mapping file. Relative paths resolve against the config file. | `lanpull.access` |
+| `ACCESS_PATH` | JSON access policy. Relative paths resolve against the config file. | `lanpull.access.json` |
 | `AUDIT_LOG` | JSON-lines audit log. | `/var/lib/lanpull/access.log` |
 
 The real file is mode 600 and is never committed. Blank lines and `#` comments
@@ -256,17 +270,53 @@ The optional third field binds the account to a source IP; omit it (or use
 account, exempt from the arming window. Managed with `make add-client`,
 `make remove-client`, and `make passwd`; never committed.
 
-### Access rules — `config/lanpull.access`
+### Access policy — `config/lanpull.access.json`
 
-One rule per line:
+One JSON object; never committed and mode 600:
 
-```text
-<client-name> <share>[:<glob>]
+```json
+{
+  "version": 1,
+  "shares": {
+    "reports": {
+      "public": ["quarterly.pdf"],
+      "clients": {
+        "laptop": { "add": ["draft.pdf"], "remove": ["quarterly.pdf"] }
+      }
+    }
+  }
+}
 ```
 
-`<share>` is a share name or `*` (every share); `<glob>` is share-relative
-(`*` within a segment, `**` across segments). Default is deny. Managed with
-`make add-client --share`/`make grant`/`make revoke`; never committed.
+- `public` is visible to **every** account of that share; a newly created
+  account inherits it automatically.
+- `clients.<name>.add` adds paths for that account only; `remove` subtracts
+  paths (including public ones) for that account only.
+- The effective set is `(public − remove) ∪ add`, sorted by path. Default is
+  deny: a path named nowhere is invisible, and an account sees only what its
+  policy allows.
+- A `<path>` is share-relative and uses the glob grammar (`*` within a segment,
+  `**` across segments), so a literal file name grants exactly that file and
+  `**` grants the whole share.
+
+Manage it with the `lanpull access` commands; the server reads the policy per
+request, so changes take effect without a restart.
+
+```bash
+lanpull access public add reports:quarterly.pdf     # add a file for everyone
+lanpull access public remove reports:quarterly.pdf  # remove it for everyone
+lanpull access public list                          # show the public set
+lanpull access client add laptop reports:draft.pdf  # personal file
+lanpull access client remove laptop reports:quarterly.pdf   # hide one file from one client
+lanpull access client list [<client-name>]          # effective set per client
+lanpull access import --from <old-lanpull.access>   # one-time migration from the flat file
+lanpull access doctor                               # unknown shares, missing files, empty accounts
+lanpull access apply                                # regenerate manifests after a manual edit
+```
+
+The old flat `config/lanpull.access` format (`<client> <share>[:<glob>]`) and
+the `grant`/`revoke`/`--share` commands are gone; `access import` reads the old
+file once and writes the JSON policy.
 
 ### Client — `<client-folder>/lanpull.conf`
 
@@ -291,6 +341,49 @@ single share:
 There is no default: if there is no `MIRROR_<share>` entry, `pull.py` fails.
 This is separate from the server's share directories, which are the sources the
 manifests are built from and are never written by a pull.
+
+## Worked example
+
+Two clients, one file everyone gets, one file only for `client-01`. The share
+`cube` is `<share-dir>`, containing `sub/common.pdf` (common) and
+`sub/target.pdf` (target).
+
+```bash
+# --- one-time server setup ---
+make build && make install
+# config/lanpull.conf: SHARE_cube=<share-dir>, ACCESS_PATH=lanpull.access.json
+make cert
+
+# --- access policy ---
+lanpull access public add cube:sub/common.pdf
+lanpull access client add client-01 cube:sub/target.pdf
+lanpull access client list                 # client-01 sees both; others see common only
+lanpull access doctor
+
+# --- accounts + staged folders ---
+lanpull add-client client-01 --ip <client-ip> --output <output-dir>
+lanpull add-client client-02 --output <output-dir>
+
+# --- manifests + serve ---
+lanpull access apply                       # or: make rescan
+make up
+
+# --- round: arm on the server, pull on each client ---
+lanpull arm --all --ttl 15m
+# on each client, from ~/lanpull/
+./pull.py --check
+./pull.py                                  # client-02 never sees sub/target.pdf
+lanpull report --since 1h                  # on the server
+
+# --- later changes ---
+lanpull access public add cube:sub/new.pdf         # new file for everyone
+lanpull access client remove client-01 cube:sub/target.pdf   # hide it from one client
+lanpull access client add client-02 cube:sub/only-02.pdf     # personal file
+lanpull access public remove cube:sub/common.pdf   # withdraw a file from everyone
+```
+
+Every `lanpull access` mutation saves the JSON policy (mode 600) and regenerates
+the per-account manifests immediately, so the next pull sees the change.
 
 ## Security model
 

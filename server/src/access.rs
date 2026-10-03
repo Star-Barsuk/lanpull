@@ -1,17 +1,16 @@
-//! Per-client access mapping.
+//! Access rule matching.
 //!
-//! `config/lanpull.access` (mode `0600`, never committed) holds one rule per
-//! line: `<client-name> <share>[:<glob>]`. A rule grants an account the whole
-//! share, or the paths matching a glob. The default is deny: an account with no
-//! rule sees nothing. A share token of `*` matches every share.
+//! This module is the compiled form of the access policy: a flat allow-list of
+//! `(account, share, glob)` rules produced by expanding
+//! `config/lanpull.access.json` (see [`crate::policy`]). A rule grants an
+//! account the whole share, or the paths matching a glob. The default is deny:
+//! an account with no rule sees nothing.
 //!
 //! Glob syntax: `/`-separated segments, where `*` matches within one segment
 //! and `**` matches zero or more segments. Patterns cannot escape the share
 //! (no leading `/`, no `..`, no `_lanpull` segment).
 
 use std::collections::BTreeMap;
-use std::io::ErrorKind;
-use std::path::Path;
 
 use crate::config::valid_share_name;
 use crate::error::{Error, Result};
@@ -222,33 +221,6 @@ impl Access {
         Self::default()
     }
 
-    /// Load the mapping from `path`, returning an empty mapping when absent.
-    pub fn load(path: &Path) -> Result<Self> {
-        let text = match std::fs::read_to_string(path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Self::new()),
-            Err(e) => return Err(e.into()),
-        };
-        parse(&text)
-    }
-
-    /// Atomically write the mapping to `path` with mode `0600`.
-    pub fn save(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let mut text = String::new();
-        for (account, rules) in &self.rules {
-            for rule in rules {
-                text.push_str(account);
-                text.push(' ');
-                text.push_str(&rule.spec());
-                text.push('\n');
-            }
-        }
-        crate::atomic::write_private(path, text.as_bytes())
-    }
-
     /// Return the rules for an account.
     pub fn rules(&self, account: &str) -> &[Rule] {
         self.rules.get(account).map_or(&[], Vec::as_slice)
@@ -288,32 +260,6 @@ impl Access {
             .push(rule);
     }
 
-    /// Remove matching rules for an account, returning whether any were removed.
-    pub fn remove_rules(&mut self, account: &str, share: Option<&str>, glob: Option<&str>) -> bool {
-        let Some(rules) = self.rules.get_mut(account) else {
-            return false;
-        };
-        let before = rules.len();
-        rules.retain(|rule| {
-            let share_matches = share.is_none_or(|name| {
-                rule.share.as_deref() == Some(name) || (name == "*" && rule.share.is_none())
-            });
-            let glob_matches =
-                glob.is_none_or(|want| rule.glob.as_ref().map(Glob::as_str) == Some(want));
-            !(share_matches && glob_matches)
-        });
-        let removed = rules.len() != before;
-        if rules.is_empty() {
-            self.rules.remove(account);
-        }
-        removed
-    }
-
-    /// Remove every rule for an account, returning whether any were present.
-    pub fn remove_account(&mut self, account: &str) -> bool {
-        self.rules.remove(account).is_some()
-    }
-
     /// Iterate over accounts that have rules, in name order.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &[Rule])> {
         self.rules
@@ -325,34 +271,6 @@ impl Access {
     pub fn is_empty(&self) -> bool {
         self.rules.is_empty()
     }
-}
-
-/// Parse the access file.
-fn parse(text: &str) -> Result<Access> {
-    let mut access = Access::new();
-    for (index, raw) in text.lines().enumerate() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let line_number = index.saturating_add(1);
-        let mut fields = line.split_whitespace();
-        let account = fields
-            .next()
-            .ok_or_else(|| Error::Config(format!("access line {line_number}: missing account")))?;
-        let spec = fields
-            .next()
-            .ok_or_else(|| Error::Config(format!("access line {line_number}: missing rule")))?;
-        if fields.next().is_some() {
-            return Err(Error::Config(format!(
-                "access line {line_number}: expected two fields"
-            )));
-        }
-        let rule = Rule::parse(spec)
-            .map_err(|e| Error::Config(format!("access line {line_number}: {e}")))?;
-        access.add_rule(account, rule);
-    }
-    Ok(access)
 }
 
 #[cfg(test)]
@@ -369,34 +287,39 @@ mod tests {
 
     use super::*;
 
-    fn access(text: &str) -> Access {
-        parse(text).unwrap()
+    /// Build an access set from `<account> <spec>` pairs.
+    fn access(entries: &[(&str, &str)]) -> Access {
+        let mut access = Access::new();
+        for (account, spec) in entries {
+            access.add_rule(account, Rule::parse(spec).unwrap());
+        }
+        access
     }
 
     #[test]
     fn default_deny() {
-        let a = access("laptop reports\n");
+        let a = access(&[("laptop", "reports")]);
         assert!(!a.allows("other", "reports", "a.pdf"));
         assert!(!a.allows("laptop", "media", "song.mp3"));
     }
 
     #[test]
     fn whole_share_allows_everything() {
-        let a = access("laptop reports\n");
+        let a = access(&[("laptop", "reports")]);
         assert!(a.allows("laptop", "reports", "a/b/c.pdf"));
         assert!(a.allows_share("laptop", "reports"));
     }
 
     #[test]
     fn star_grant_covers_all_shares() {
-        let a = access("desktop *\n");
+        let a = access(&[("desktop", "*")]);
         assert!(a.allows("desktop", "reports", "x"));
         assert!(a.allows("desktop", "media", "y"));
     }
 
     #[test]
     fn prefix_and_double_star() {
-        let a = access("laptop media:music/**\nlaptop docs:a\n");
+        let a = access(&[("laptop", "media:music/**"), ("laptop", "docs:a")]);
         assert!(a.allows("laptop", "media", "music/song.mp3"));
         assert!(a.allows("laptop", "media", "music/2026/album/track.flac"));
         assert!(!a.allows("laptop", "media", "video/clip.mp4"));
@@ -406,30 +329,32 @@ mod tests {
 
     #[test]
     fn wildcard_within_segment() {
-        let a = access("laptop reports:*.pdf\n");
+        let a = access(&[("laptop", "reports:*.pdf")]);
         assert!(a.allows("laptop", "reports", "final.pdf"));
         assert!(!a.allows("laptop", "reports", "sub/draft.pdf"));
         assert!(!a.allows("laptop", "reports", "final.docx"));
 
-        let nested = access("laptop reports:**/*.pdf\n");
+        let nested = access(&[("laptop", "reports:**/*.pdf")]);
         assert!(nested.allows("laptop", "reports", "sub/draft.pdf"));
         assert!(nested.allows("laptop", "reports", "final.pdf"));
     }
 
     #[test]
-    fn unknown_share_names_are_rejected() {
-        assert!(parse("laptop Reports\n").is_err());
-        assert!(parse("laptop reports:/abs\n").is_err());
-        assert!(parse("laptop reports:../x\n").is_err());
-        assert!(parse("laptop reports:_lanpull/x\n").is_err());
-        assert!(parse("laptop\n").is_err());
-        assert!(parse("laptop reports extra\n").is_err());
+    fn bad_rule_specs_are_rejected() {
+        assert!(Rule::parse("Reports").is_err());
+        assert!(Rule::parse("reports:/abs").is_err());
+        assert!(Rule::parse("reports:../x").is_err());
+        assert!(Rule::parse("reports:_lanpull/x").is_err());
+        assert!(Rule::parse("").is_err());
     }
 
     #[test]
-    fn round_trip() {
-        let text = "laptop reports\nlaptop media:music/**\ndesktop *\n";
-        let a = access(text);
+    fn rules_accumulate_per_account() {
+        let a = access(&[
+            ("laptop", "reports"),
+            ("laptop", "media:music/**"),
+            ("desktop", "*"),
+        ]);
         assert_eq!(a.iter().count(), 2);
         assert_eq!(a.rules("laptop").len(), 2);
         assert!(a.allows("laptop", "media", "music/x"));

@@ -25,14 +25,13 @@ use tower_http::services::ServeFile;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::timeout::TimeoutLayer;
 
-use crate::access::Access;
 use crate::arm::ArmState;
 use crate::audit::{self, Record};
 use crate::clients::{Account, Clients, Verify};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::timeutil;
-use crate::{bundle, relpath, status};
+use crate::{bundle, policy, relpath, status};
 
 /// Maximum accepted request body size in bytes.
 const MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -242,11 +241,11 @@ async fn serve_share_manifest(
     if !state.config.shares.contains_key(&share) {
         return not_found().await;
     }
-    match Access::load(&state.config.access_path) {
+    match policy::load_access(&state.config) {
         Ok(access) if access.allows_share(&user.0, &share) => {}
         Ok(_) => return forbidden(),
         Err(e) => {
-            tracing::warn!("cannot read access mapping: {e}");
+            tracing::warn!("cannot read access policy: {e}");
             return forbidden();
         }
     }
@@ -274,11 +273,11 @@ async fn serve_share_file(
     if relpath::validate(&path).is_err() {
         return not_found().await;
     }
-    match Access::load(&state.config.access_path) {
+    match policy::load_access(&state.config) {
         Ok(access) if access.allows(&user.0, &share, &path) => {}
         Ok(_) => return forbidden(),
         Err(e) => {
-            tracing::warn!("cannot read access mapping: {e}");
+            tracing::warn!("cannot read access policy: {e}");
             return forbidden();
         }
     }

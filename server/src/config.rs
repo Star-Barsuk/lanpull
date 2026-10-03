@@ -22,8 +22,8 @@ pub const DEFAULT_BIND: &str = "0.0.0.0";
 pub const DEFAULT_PORT: u16 = 8000;
 /// The default account file location, resolved relative to the config file.
 pub const DEFAULT_CLIENTS_PATH: &str = "lanpull.clients";
-/// The default access file location, resolved relative to the config file.
-pub const DEFAULT_ACCESS_PATH: &str = "lanpull.access";
+/// The default access policy location, resolved relative to the config file.
+pub const DEFAULT_ACCESS_PATH: &str = "lanpull.access.json";
 /// The prefix a share key uses.
 const SHARE_PREFIX: &str = "SHARE_";
 

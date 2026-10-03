@@ -9,12 +9,12 @@ use std::path::Path;
 
 use walkdir::WalkDir;
 
-use crate::access::Access;
 use crate::arm::ArmState;
 use crate::clients::Clients;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::manifest::Manifest;
+use crate::policy::Policy;
 use crate::relpath;
 use crate::timeutil;
 
@@ -126,31 +126,32 @@ pub fn freshness_warnings(share: &Path, manifest: &Manifest) -> Vec<String> {
     warnings
 }
 
-/// Warn about accounts without rules and rules naming unknown shares.
+/// Warn about accounts without rules and policy entries naming unknown shares.
 pub fn access_warnings(config: &Config) -> Vec<String> {
     let mut warnings = Vec::new();
-    let access = match Access::load(&config.access_path) {
-        Ok(access) => access,
+    let policy = match Policy::load(&config.access_path) {
+        Ok(policy) => policy,
         Err(e) => {
-            warnings.push(format!("cannot read access mapping: {e}"));
+            warnings.push(format!("cannot read access policy: {e}"));
             return warnings;
         }
     };
 
-    for (account, rules) in access.iter() {
-        for rule in rules {
-            if let Some(name) = &rule.share {
-                if !config.shares.contains_key(name) {
-                    warnings.push(format!(
-                        "access: account {account} references unknown share {name}"
-                    ));
-                }
-            }
+    for share in policy.shares.keys() {
+        if !config.shares.contains_key(share) {
+            warnings.push(format!("access: policy references unknown share {share}"));
         }
     }
 
     match Clients::load(&config.clients_path) {
         Ok(clients) => {
+            let access = match policy.expand(&clients) {
+                Ok(access) => access,
+                Err(e) => {
+                    warnings.push(format!("cannot expand access policy: {e}"));
+                    return warnings;
+                }
+            };
             if !clients.is_empty() && access.is_empty() {
                 warnings.push("no access rules; every account can pull nothing".to_string());
             }

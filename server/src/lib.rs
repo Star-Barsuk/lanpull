@@ -19,6 +19,7 @@ pub mod hash;
 pub mod http;
 pub mod ignore;
 pub mod manifest;
+pub mod policy;
 pub mod relpath;
 pub mod status;
 pub mod timeutil;

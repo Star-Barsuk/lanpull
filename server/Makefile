@@ -48,7 +48,7 @@ UNINSTALL_CMD = $(SCRIPTS)/uninstall.sh --binary "$(LANPULL)" --unit "$(UNIT)" \
 
 .PHONY: help setup build config client-bundle install uninstall wipe \
         up down restart logs status rescan cert \
-        add-client remove-client list-clients grant revoke passwd arm disarm report \
+        add-client remove-client list-clients access passwd arm disarm report \
         clean distclean confirm check-tools \
         fmt fmt-check lint doc test deny audit audit-bin geiger security ci
 
@@ -119,14 +119,11 @@ add-client: ## Create an account: make add-client NAME=<client-name> [IP=<client
 remove-client: ## Revoke an account: make remove-client NAME=<client-name>
 	$(LANPULL) remove-client $(NAME) --config $(LANPULL_CONF_ABS)
 
-list-clients: ## List accounts, IPs, and access rules
+list-clients: ## List accounts, IPs, and effective access rules
 	$(LANPULL) list-clients --config $(LANPULL_CONF_ABS)
 
-grant: ## Add an access rule: make grant NAME=<client-name> RULE=<share>[:<glob>]
-	$(LANPULL) grant $(NAME) "$(RULE)" --config $(LANPULL_CONF_ABS)
-
-revoke: ## Remove access rules: make revoke NAME=<client-name> [RULE=<share>[:<glob>]]
-	$(LANPULL) revoke $(NAME) $(if $(RULE),"$(RULE)",) --config $(LANPULL_CONF_ABS)
+access: ## Access policy: make access ARGS='client list'
+	$(LANPULL) access $(ARGS) --config $(LANPULL_CONF_ABS)
 
 passwd: ## Rotate a password: make passwd NAME=<client-name>
 	$(LANPULL) passwd $(NAME) --config $(LANPULL_CONF_ABS)

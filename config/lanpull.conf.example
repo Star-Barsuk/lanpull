@@ -35,6 +35,11 @@ KEY_PATH=/var/lib/lanpull/server.key
 # Relative paths are resolved against the directory of this config file.
 CLIENTS_PATH=lanpull.clients
 
+# Access policy: JSON mapping each share to a public file set plus per-account
+# additions and removals. Managed by `lanpull access`; mode 600; never
+# committed. Relative paths are resolved against the directory of this config.
+ACCESS_PATH=lanpull.access.json
+
 # Audit log written by `lanpull serve` (one JSON line per request). Read by
 # `make report`.
 AUDIT_LOG=/var/lib/lanpull/access.log

@@ -6,6 +6,7 @@ AGENTS.md
 config/lanpull.conf
 config/lanpull.clients
 config/lanpull.access
+config/lanpull.access.json
 
 # --- Internal development documents (not distributed) ---------------------
 docs/

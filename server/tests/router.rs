@@ -21,10 +21,12 @@ use axum::extract::ConnectInfo;
 use axum::http::{header, Request, StatusCode};
 use base64::Engine as _;
 use http_body_util::BodyExt as _;
+use lanpull::access::Rule;
 use lanpull::arm::ArmState;
 use lanpull::clients::{self, Account, Clients};
 use lanpull::config::Config;
 use lanpull::http::{router, AppState};
+use lanpull::policy::Policy;
 use tower::ServiceExt as _;
 
 const REASON_HEADER: &str = "x-lanpull-reason";
@@ -36,6 +38,44 @@ fn account(name: &str, password: &str, ip: Option<&str>) -> Account {
         allowed_ip: ip.map(|value| value.parse().unwrap()),
         local: false,
     }
+}
+
+/// Convert legacy `<account> <share>[:<glob>]` lines into a JSON policy.
+///
+/// A `*` share expands to every configured share; a rule without a glob grants
+/// the whole share. This keeps the test call sites readable.
+fn policy_from_flat(shares: &BTreeMap<String, PathBuf>, text: &str) -> Policy {
+    let mut policy = Policy::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let account = fields.next().unwrap();
+        let spec = fields.next().unwrap();
+        let rule = Rule::parse(spec).unwrap();
+        let names: Vec<String> = rule.share.as_ref().map_or_else(
+            || shares.keys().cloned().collect(),
+            |name| vec![name.clone()],
+        );
+        let path = rule
+            .glob
+            .as_ref()
+            .map_or_else(|| "**".to_string(), |glob| glob.as_str().to_string());
+        for name in names {
+            policy
+                .shares
+                .entry(name)
+                .or_default()
+                .clients
+                .entry(account.to_string())
+                .or_default()
+                .add
+                .insert(path.clone());
+        }
+    }
+    policy
 }
 
 /// Build shared server state with one `reports` share and a matching manifest.
@@ -55,11 +95,14 @@ fn build(accounts: Vec<Account>, access_text: &str) -> (AppState, tempfile::Temp
     }
     clients.save(&clients_path).unwrap();
 
-    let access_path = dir.path().join("lanpull.access");
-    fs::write(&access_path, access_text).unwrap();
-
     let mut shares = BTreeMap::new();
     shares.insert("reports".to_string(), share);
+
+    let access_path = dir.path().join("lanpull.access.json");
+    policy_from_flat(&shares, access_text)
+        .save(&access_path)
+        .unwrap();
+
     let config = Config {
         shares,
         state_dir: state_dir.clone(),

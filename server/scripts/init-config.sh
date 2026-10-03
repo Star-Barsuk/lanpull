@@ -150,7 +150,7 @@ CERT_PATH="$STATE_DIR/server.crt"
 KEY_PATH="$STATE_DIR/server.key"
 AUDIT_LOG="$STATE_DIR/access.log"
 CLIENTS_PATH="lanpull.clients"
-ACCESS_PATH="lanpull.access"
+ACCESS_PATH="lanpull.access.json"
 
 mkdir -p "$(dirname "$CONFIG")"
 if [ ! -d "$SHARE_DIR" ]; then

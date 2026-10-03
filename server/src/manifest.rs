@@ -18,6 +18,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::hash::sha256_file;
 use crate::ignore::is_ignored;
+use crate::policy::Policy;
 use crate::relpath;
 use crate::timeutil;
 
@@ -191,8 +192,9 @@ pub struct Regenerated {
 /// This is the single implementation behind `make rescan` and every CLI
 /// mutation that changes accounts or the access mapping.
 pub fn regenerate(config: &Config) -> Result<Regenerated> {
-    let access = Access::load(&config.access_path)?;
     let clients = Clients::load(&config.clients_path)?;
+    let policy = Policy::load(&config.access_path)?;
+    let access = policy.expand(&clients)?;
     let mut report = Regenerated::default();
 
     let mut full: BTreeMap<String, Manifest> = BTreeMap::new();

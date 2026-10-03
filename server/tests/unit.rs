@@ -16,7 +16,8 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use lanpull::{access::Access, arm::ArmState, audit, bundle, clients, config, manifest, timeutil};
+use lanpull::access::{Access, Rule};
+use lanpull::{arm::ArmState, audit, bundle, clients, config, manifest, timeutil};
 
 #[test]
 fn ignore_patterns_match() {
@@ -124,21 +125,12 @@ fn clients_parse_ignores_malformed_lines() {
 }
 
 #[test]
-fn access_round_trips_and_scopes() {
-    use lanpull::access::Rule;
-
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("lanpull.access");
+fn access_rules_scope_paths() {
     let mut access = Access::new();
     access.add_rule("laptop", Rule::parse("reports").unwrap());
     access.add_rule("laptop", Rule::parse("media:music/**").unwrap());
     access.add_rule("desktop", Rule::parse("*").unwrap());
-    access.save(&path).unwrap();
 
-    let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600);
-
-    let access = Access::load(&path).unwrap();
     assert!(access.allows("laptop", "reports", "a/b.pdf"));
     assert!(access.allows("laptop", "media", "music/2026/track.flac"));
     assert!(!access.allows("laptop", "media", "video/clip.mp4"));
@@ -164,9 +156,8 @@ fn manifest_filter_scopes_entries() {
     )
     .unwrap();
 
-    let access_path = dir.path().join("lanpull.access");
-    fs::write(&access_path, "laptop media:music/**\n").unwrap();
-    let access = Access::load(&access_path).unwrap();
+    let mut access = Access::new();
+    access.add_rule("laptop", Rule::parse("media:music/**").unwrap());
     let filtered = manifest::filter(&manifest, &access, "laptop", "media");
     let paths: Vec<&str> = filtered.files.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(paths, vec!["music/song.mp3"]);
