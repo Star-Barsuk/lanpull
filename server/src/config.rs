@@ -4,6 +4,9 @@
 //! also usable as a systemd `EnvironmentFile`. Blank lines and lines starting
 //! with `#` are ignored, surrounding single or double quotes are stripped, and
 //! values may reference environment variables with `$NAME` or `${NAME}`.
+//!
+//! Shares are declared with one key per share, `SHARE_<name>=<path>`; the name
+//! must match `^[a-z0-9][a-z0-9_-]*$`. There is no single-share fallback.
 
 use std::collections::BTreeMap;
 use std::net::IpAddr;
@@ -19,13 +22,29 @@ pub const DEFAULT_BIND: &str = "0.0.0.0";
 pub const DEFAULT_PORT: u16 = 8000;
 /// The default account file location, resolved relative to the config file.
 pub const DEFAULT_CLIENTS_PATH: &str = "lanpull.clients";
+/// The default access file location, resolved relative to the config file.
+pub const DEFAULT_ACCESS_PATH: &str = "lanpull.access";
+/// The prefix a share key uses.
+const SHARE_PREFIX: &str = "SHARE_";
+
+/// Return `true` when `name` is a valid share name.
+pub fn valid_share_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_lowercase() || first.is_ascii_digit()) {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+}
 
 /// Server configuration loaded from a `KEY=VALUE` file.
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Directory whose contents are distributed to clients.
-    pub share_dir: PathBuf,
-    /// Directory holding manifest, cache, TLS material, arm state, and log.
+    /// Named shares: share name to the directory it distributes.
+    pub shares: BTreeMap<String, PathBuf>,
+    /// Directory holding manifests, cache, TLS material, arm state, and log.
     pub state_dir: PathBuf,
     /// Address the server binds to.
     pub bind: IpAddr,
@@ -39,6 +58,8 @@ pub struct Config {
     pub key_path: PathBuf,
     /// Path to the per-client account file.
     pub clients_path: PathBuf,
+    /// Path to the per-client access mapping.
+    pub access_path: PathBuf,
     /// Path to the JSON-lines audit log.
     pub audit_log: PathBuf,
 }
@@ -59,18 +80,23 @@ impl Config {
 
     /// Resolve every relative path against `base`.
     fn resolve(mut self, base: &Path) -> Self {
-        self.share_dir = resolve_one(base, self.share_dir);
+        self.shares = self
+            .shares
+            .into_iter()
+            .map(|(name, path)| (name, resolve_one(base, path)))
+            .collect();
         self.state_dir = resolve_one(base, self.state_dir);
         self.cert_path = resolve_one(base, self.cert_path);
         self.key_path = resolve_one(base, self.key_path);
         self.clients_path = resolve_one(base, self.clients_path);
+        self.access_path = resolve_one(base, self.access_path);
         self.audit_log = resolve_one(base, self.audit_log);
         self
     }
 
     /// Build a configuration from parsed key/value pairs.
     pub fn from_map(map: &BTreeMap<String, String>) -> Result<Self> {
-        let share_dir = required_path(map, "SHARE_DIR")?;
+        let shares = parse_shares(map)?;
         let state_dir =
             optional_path(map, "STATE_DIR").unwrap_or_else(|| PathBuf::from(DEFAULT_STATE_DIR));
 
@@ -92,11 +118,13 @@ impl Config {
             optional_path(map, "KEY_PATH").unwrap_or_else(|| state_dir.join("server.key"));
         let clients_path = optional_path(map, "CLIENTS_PATH")
             .unwrap_or_else(|| PathBuf::from(DEFAULT_CLIENTS_PATH));
+        let access_path =
+            optional_path(map, "ACCESS_PATH").unwrap_or_else(|| PathBuf::from(DEFAULT_ACCESS_PATH));
         let audit_log =
             optional_path(map, "AUDIT_LOG").unwrap_or_else(|| state_dir.join("access.log"));
 
         Ok(Self {
-            share_dir,
+            shares,
             state_dir,
             bind,
             port,
@@ -104,18 +132,36 @@ impl Config {
             cert_path,
             key_path,
             clients_path,
+            access_path,
             audit_log,
         })
     }
 
-    /// Path of the data manifest.
-    pub fn manifest_path(&self) -> PathBuf {
-        self.state_dir.join("manifest.json")
+    /// Directory holding generated manifests (full and per-account).
+    pub fn manifest_dir(&self) -> PathBuf {
+        self.state_dir.join("manifest")
     }
 
-    /// Path of the hash cache.
-    pub fn cache_path(&self) -> PathBuf {
-        self.state_dir.join("manifest.cache.json")
+    /// Path of a share's full manifest.
+    pub fn manifest_path(&self, share: &str) -> PathBuf {
+        self.manifest_dir().join(format!("{share}.json"))
+    }
+
+    /// Path of a share's hash cache.
+    pub fn cache_path(&self, share: &str) -> PathBuf {
+        self.manifest_dir().join(format!("{share}.cache.json"))
+    }
+
+    /// Directory holding per-account filtered manifests.
+    pub fn access_dir(&self) -> PathBuf {
+        self.manifest_dir().join("access")
+    }
+
+    /// Path of an account's filtered manifest for one share.
+    pub fn access_manifest_path(&self, account: &str, share: &str) -> PathBuf {
+        self.access_dir()
+            .join(account)
+            .join(format!("{share}.json"))
     }
 
     /// Path of the arm state file.
@@ -127,6 +173,31 @@ impl Config {
     pub fn bundle_dir(&self) -> PathBuf {
         self.state_dir.join("client")
     }
+}
+
+/// Collect the `SHARE_<name>=<path>` keys into a name-to-path map.
+fn parse_shares(map: &BTreeMap<String, String>) -> Result<BTreeMap<String, PathBuf>> {
+    let mut shares = BTreeMap::new();
+    for (key, value) in map {
+        let Some(name) = key.strip_prefix(SHARE_PREFIX) else {
+            continue;
+        };
+        if !valid_share_name(name) {
+            return Err(Error::Config(format!(
+                "invalid share name in key {key}: must match ^[a-z0-9][a-z0-9_-]*$"
+            )));
+        }
+        if value.is_empty() {
+            return Err(Error::Config(format!("{key} is empty")));
+        }
+        shares.insert(name.to_string(), PathBuf::from(value));
+    }
+    if shares.is_empty() {
+        return Err(Error::Config(
+            "at least one SHARE_<name>=<path> is required".to_string(),
+        ));
+    }
+    Ok(shares)
 }
 
 /// Parse a `KEY=VALUE` file into a map.
@@ -215,13 +286,6 @@ fn expand_env(value: &str) -> String {
     result
 }
 
-fn required_path(map: &BTreeMap<String, String>, key: &str) -> Result<PathBuf> {
-    map.get(key)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .ok_or_else(|| Error::Config(format!("{key} is required")))
-}
-
 fn optional_path(map: &BTreeMap<String, String>, key: &str) -> Option<PathBuf> {
     map.get(key)
         .filter(|value| !value.is_empty())
@@ -247,4 +311,70 @@ fn parse_ip(key: &str, value: &str) -> Result<IpAddr> {
     value
         .parse::<IpAddr>()
         .map_err(|e| Error::Config(format!("{key}: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    // Tests may unwrap and use bare asserts for brevity; production code may not.
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::missing_assert_message
+    )]
+
+    use super::*;
+
+    fn map(text: &str) -> BTreeMap<String, String> {
+        parse_kv(text)
+    }
+
+    #[test]
+    fn share_names_validated() {
+        assert!(valid_share_name("reports"));
+        assert!(valid_share_name("media-2026"));
+        assert!(valid_share_name("a_b"));
+        assert!(!valid_share_name("Reports"));
+        assert!(!valid_share_name("-x"));
+        assert!(!valid_share_name("a b"));
+        assert!(!valid_share_name(""));
+    }
+
+    #[test]
+    fn parses_multiple_shares() {
+        let m = map("SHARE_reports=/srv/r\nSHARE_media=/srv/m\nSERVER_IP=127.0.0.1\n");
+        let config = Config::from_map(&m).unwrap();
+        assert_eq!(config.shares.len(), 2);
+        assert!(config.shares.contains_key("reports"));
+        assert!(config.shares.contains_key("media"));
+    }
+
+    #[test]
+    fn requires_at_least_one_share() {
+        let m = map("SERVER_IP=127.0.0.1\n");
+        assert!(Config::from_map(&m).is_err());
+    }
+
+    #[test]
+    fn rejects_bad_share_name() {
+        let m = map("SHARE_Bad=/srv/x\nSERVER_IP=127.0.0.1\n");
+        assert!(Config::from_map(&m).is_err());
+    }
+
+    #[test]
+    fn manifest_paths_are_per_share() {
+        let m = map("SHARE_reports=/srv/r\nSTATE_DIR=/state\nSERVER_IP=127.0.0.1\n");
+        let config = Config::from_map(&m).unwrap();
+        assert!(config
+            .manifest_path("reports")
+            .ends_with("manifest/reports.json"));
+        assert!(config
+            .cache_path("reports")
+            .ends_with("manifest/reports.cache.json"));
+        assert!(config
+            .access_manifest_path("laptop", "reports")
+            .ends_with("manifest/access/laptop/reports.json"));
+    }
 }

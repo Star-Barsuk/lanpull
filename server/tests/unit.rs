@@ -16,7 +16,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use lanpull::{arm::ArmState, audit, bundle, clients, config, manifest, timeutil};
+use lanpull::{access::Access, arm::ArmState, audit, bundle, clients, config, manifest, timeutil};
 
 #[test]
 fn ignore_patterns_match() {
@@ -44,10 +44,10 @@ fn iso8601_roundtrip() {
 
 #[test]
 fn config_parses_quotes_and_defaults() {
-    let text = "# comment\nSHARE_DIR=\"/srv/share\"\nSERVER_IP=10.0.0.1\nPORT=9000\n";
+    let text = "# comment\nSHARE_reports=\"/srv/share\"\nSERVER_IP=10.0.0.1\nPORT=9000\n";
     let map = config::parse_kv(text);
     let cfg = config::Config::from_map(&map).unwrap();
-    assert_eq!(cfg.share_dir, Path::new("/srv/share"));
+    assert_eq!(cfg.shares.get("reports").unwrap(), Path::new("/srv/share"));
     assert_eq!(cfg.port, 9000);
     assert_eq!(cfg.server_ip.to_string(), "10.0.0.1");
     assert_eq!(cfg.cert_path, Path::new("/var/lib/lanpull/server.crt"));
@@ -55,14 +55,17 @@ fn config_parses_quotes_and_defaults() {
 
 #[test]
 fn config_expands_missing_env_verbatim() {
-    let map = config::parse_kv("SHARE_DIR=/srv/${LANPULL_NO_SUCH_VAR}\n");
-    assert_eq!(map.get("SHARE_DIR").unwrap(), "/srv/${LANPULL_NO_SUCH_VAR}");
+    let map = config::parse_kv("SHARE_reports=/srv/${LANPULL_NO_SUCH_VAR}\n");
+    assert_eq!(
+        map.get("SHARE_reports").unwrap(),
+        "/srv/${LANPULL_NO_SUCH_VAR}"
+    );
 }
 
 #[test]
 fn config_requires_share_and_server_ip() {
     let mut map = BTreeMap::new();
-    map.insert("SHARE_DIR".to_string(), "/srv/share".to_string());
+    map.insert("SERVER_IP".to_string(), "10.0.0.1".to_string());
     assert!(config::Config::from_map(&map).is_err());
 }
 
@@ -86,11 +89,13 @@ fn clients_roundtrip_with_optional_ip() {
         name: "alpha".to_string(),
         hash: clients::hash_password("secret").unwrap(),
         allowed_ip: Some("10.0.0.5".parse().unwrap()),
+        local: false,
     });
     accounts.insert(clients::Account {
         name: "beta".to_string(),
         hash: clients::hash_password("secret").unwrap(),
         allowed_ip: None,
+        local: true,
     });
     accounts.save(&path).unwrap();
 
@@ -103,7 +108,9 @@ fn clients_roundtrip_with_optional_ip() {
         loaded.get("alpha").unwrap().allowed_ip.unwrap().to_string(),
         "10.0.0.5"
     );
+    assert!(!loaded.get("alpha").unwrap().local);
     assert!(loaded.get("beta").unwrap().allowed_ip.is_none());
+    assert!(loaded.get("beta").unwrap().local);
 }
 
 #[test]
@@ -114,6 +121,55 @@ fn clients_parse_ignores_malformed_lines() {
     fs::write(&path, text).unwrap();
     let loaded = clients::Clients::load(&path).unwrap();
     assert_eq!(loaded.len(), 2);
+}
+
+#[test]
+fn access_round_trips_and_scopes() {
+    use lanpull::access::Rule;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lanpull.access");
+    let mut access = Access::new();
+    access.add_rule("laptop", Rule::parse("reports").unwrap());
+    access.add_rule("laptop", Rule::parse("media:music/**").unwrap());
+    access.add_rule("desktop", Rule::parse("*").unwrap());
+    access.save(&path).unwrap();
+
+    let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+
+    let access = Access::load(&path).unwrap();
+    assert!(access.allows("laptop", "reports", "a/b.pdf"));
+    assert!(access.allows("laptop", "media", "music/2026/track.flac"));
+    assert!(!access.allows("laptop", "media", "video/clip.mp4"));
+    assert!(access.allows("desktop", "media", "anything"));
+    assert!(!access.allows("unknown", "reports", "a"));
+    assert_eq!(access.rules("laptop").len(), 2);
+}
+
+#[test]
+fn manifest_filter_scopes_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let share = dir.path().join("share");
+    fs::create_dir_all(share.join("music")).unwrap();
+    fs::create_dir_all(share.join("video")).unwrap();
+    fs::write(share.join("music/song.mp3"), b"a").unwrap();
+    fs::write(share.join("video/clip.mp4"), b"b").unwrap();
+    fs::create_dir_all(dir.path().join("state")).unwrap();
+
+    let (manifest, _) = manifest::generate(
+        &share,
+        &dir.path().join("state/manifest/media.json"),
+        &dir.path().join("state/manifest/media.cache.json"),
+    )
+    .unwrap();
+
+    let access_path = dir.path().join("lanpull.access");
+    fs::write(&access_path, "laptop media:music/**\n").unwrap();
+    let access = Access::load(&access_path).unwrap();
+    let filtered = manifest::filter(&manifest, &access, "laptop", "media");
+    let paths: Vec<&str> = filtered.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, vec!["music/song.mp3"]);
 }
 
 #[test]

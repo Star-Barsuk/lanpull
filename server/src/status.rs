@@ -9,6 +9,7 @@ use std::path::Path;
 
 use walkdir::WalkDir;
 
+use crate::access::Access;
 use crate::arm::ArmState;
 use crate::clients::Clients;
 use crate::config::Config;
@@ -24,18 +25,29 @@ const MIN_MTIME: i64 = i64::MIN;
 pub fn startup_warnings(config: &Config) -> Vec<String> {
     let mut warnings = Vec::new();
 
-    match Manifest::load(&config.manifest_path()) {
-        Ok(manifest) => warnings.extend(freshness_warnings(config, &manifest)),
-        Err(_) => {
-            warnings.push("no manifest yet; run make rescan before the first pull".to_string());
+    for (share, dir) in &config.shares {
+        match Manifest::load(&config.manifest_path(share)) {
+            Ok(manifest) => {
+                warnings.extend(
+                    freshness_warnings(dir, &manifest)
+                        .into_iter()
+                        .map(|warning| format!("{share}: {warning}")),
+                );
+            }
+            Err(_) => warnings.push(format!(
+                "{share}: no manifest yet; run make rescan before the first pull"
+            )),
+        }
+        match walk_warnings(dir) {
+            Ok(more) => warnings.extend(
+                more.into_iter()
+                    .map(|warning| format!("{share}: {warning}")),
+            ),
+            Err(e) => warnings.push(format!("{share}: cannot inspect share directory: {e}")),
         }
     }
 
-    match walk_warnings(&config.share_dir) {
-        Ok(mut more) => warnings.append(&mut more),
-        Err(e) => warnings.push(format!("cannot inspect share directory: {e}")),
-    }
-
+    warnings.extend(access_warnings(config));
     warnings
 }
 
@@ -43,19 +55,30 @@ pub fn startup_warnings(config: &Config) -> Vec<String> {
 pub fn run(config: &Config) -> Result<Vec<String>> {
     let mut lines = Vec::new();
 
-    match Manifest::load(&config.manifest_path()) {
-        Ok(manifest) => {
-            lines.push(format!(
-                "manifest: {} files, generated_at {}",
-                manifest.files.len(),
-                manifest.generated_at
-            ));
-            lines.extend(freshness_warnings(config, &manifest));
+    for (share, dir) in &config.shares {
+        match Manifest::load(&config.manifest_path(share)) {
+            Ok(manifest) => {
+                lines.push(format!(
+                    "manifest {share}: {} files, generated_at {}",
+                    manifest.files.len(),
+                    manifest.generated_at
+                ));
+                lines.extend(
+                    freshness_warnings(dir, &manifest)
+                        .into_iter()
+                        .map(|warning| format!("{share}: {warning}")),
+                );
+            }
+            Err(_) => lines.push(format!("manifest {share}: MISSING (run make rescan)")),
         }
-        Err(_) => lines.push("manifest: MISSING (run make rescan)".to_string()),
+        lines.extend(
+            walk_warnings(dir)?
+                .into_iter()
+                .map(|warning| format!("{share}: {warning}")),
+        );
     }
 
-    lines.extend(walk_warnings(&config.share_dir)?);
+    lines.extend(access_warnings(config));
 
     let now = timeutil::now_unix();
     let arm = ArmState::load(&config.arm_path())?;
@@ -85,9 +108,9 @@ pub fn run(config: &Config) -> Result<Vec<String>> {
 }
 
 /// Warn when files in the share are newer than the manifest.
-pub fn freshness_warnings(config: &Config, manifest: &Manifest) -> Vec<String> {
+pub fn freshness_warnings(share: &Path, manifest: &Manifest) -> Vec<String> {
     let mut warnings = Vec::new();
-    match newest_mtime(&config.share_dir) {
+    match newest_mtime(share) {
         Ok(Some(newest)) => {
             if let Ok(generated) = timeutil::parse_iso8601(&manifest.generated_at) {
                 if newest > generated {
@@ -100,6 +123,46 @@ pub fn freshness_warnings(config: &Config, manifest: &Manifest) -> Vec<String> {
         Ok(None) => {}
         Err(e) => warnings.push(format!("cannot inspect share directory: {e}")),
     }
+    warnings
+}
+
+/// Warn about accounts without rules and rules naming unknown shares.
+pub fn access_warnings(config: &Config) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let access = match Access::load(&config.access_path) {
+        Ok(access) => access,
+        Err(e) => {
+            warnings.push(format!("cannot read access mapping: {e}"));
+            return warnings;
+        }
+    };
+
+    for (account, rules) in access.iter() {
+        for rule in rules {
+            if let Some(name) = &rule.share {
+                if !config.shares.contains_key(name) {
+                    warnings.push(format!(
+                        "access: account {account} references unknown share {name}"
+                    ));
+                }
+            }
+        }
+    }
+
+    match Clients::load(&config.clients_path) {
+        Ok(clients) => {
+            if !clients.is_empty() && access.is_empty() {
+                warnings.push("no access rules; every account can pull nothing".to_string());
+            }
+            for account in clients.iter() {
+                if !access.has_rules(&account.name) {
+                    warnings.push(format!("account {} has no access rules", account.name));
+                }
+            }
+        }
+        Err(e) => warnings.push(format!("cannot read accounts: {e}")),
+    }
+
     warnings
 }
 

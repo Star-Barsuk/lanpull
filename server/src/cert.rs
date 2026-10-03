@@ -22,7 +22,14 @@ pub fn generate(state_dir: &Path, server_ip: IpAddr) -> Result<(PathBuf, PathBuf
     params
         .distinguished_name
         .push(DnType::CommonName, "lanpull");
-    params.subject_alt_names = vec![SanType::IpAddress(server_ip)];
+    let mut sans = vec![
+        SanType::IpAddress(server_ip),
+        SanType::IpAddress(IpAddr::from([127, 0, 0, 1])),
+    ];
+    if let Ok(localhost) = rcgen::string::Ia5String::try_from("localhost") {
+        sans.push(SanType::DnsName(localhost));
+    }
+    params.subject_alt_names = sans;
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     params.key_usages = vec![
         KeyUsagePurpose::DigitalSignature,

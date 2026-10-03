@@ -10,8 +10,10 @@
     clippy::missing_assert_message
 )]
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -32,20 +34,19 @@ fn account(name: &str, password: &str, ip: Option<&str>) -> Account {
         name: name.to_string(),
         hash: clients::hash_password(password).unwrap(),
         allowed_ip: ip.map(|value| value.parse().unwrap()),
+        local: false,
     }
 }
 
-fn build(accounts: Vec<Account>, armed: Vec<(&str, i64)>) -> (AppState, tempfile::TempDir) {
+/// Build shared server state with one `reports` share and a matching manifest.
+fn build(accounts: Vec<Account>, access_text: &str) -> (AppState, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let share = dir.path().join("share");
     let state_dir = dir.path().join("state");
-    fs::create_dir_all(&share).unwrap();
+    fs::create_dir_all(share.join("sub")).unwrap();
     fs::create_dir_all(&state_dir).unwrap();
     fs::write(share.join("a.txt"), b"hello world").unwrap();
-
-    let manifest_path = state_dir.join("manifest.json");
-    let cache_path = state_dir.join("manifest.cache.json");
-    lanpull::manifest::generate(&share, &manifest_path, &cache_path).unwrap();
+    fs::write(share.join("sub/b.txt"), b"nested").unwrap();
 
     let clients_path = dir.path().join("lanpull.clients");
     let mut clients = Clients::new();
@@ -54,8 +55,13 @@ fn build(accounts: Vec<Account>, armed: Vec<(&str, i64)>) -> (AppState, tempfile
     }
     clients.save(&clients_path).unwrap();
 
+    let access_path = dir.path().join("lanpull.access");
+    fs::write(&access_path, access_text).unwrap();
+
+    let mut shares = BTreeMap::new();
+    shares.insert("reports".to_string(), share);
     let config = Config {
-        share_dir: share,
+        shares,
         state_dir: state_dir.clone(),
         bind: "127.0.0.1".parse().unwrap(),
         port: 0,
@@ -63,19 +69,24 @@ fn build(accounts: Vec<Account>, armed: Vec<(&str, i64)>) -> (AppState, tempfile
         cert_path: state_dir.join("server.crt"),
         key_path: state_dir.join("server.key"),
         clients_path,
+        access_path,
         audit_log: state_dir.join("access.log"),
     };
 
-    let mut arm_state = ArmState::default();
-    for (name, expiry) in armed {
-        arm_state.arm(name, expiry);
-    }
-    arm_state.save(&config.arm_path()).unwrap();
+    lanpull::manifest::regenerate(&config).unwrap();
 
     let state = AppState {
         config: Arc::new(config),
     };
     (state, dir)
+}
+
+fn arm(state: &AppState, names: &[&str]) {
+    let mut arm_state = ArmState::default();
+    for name in names {
+        arm_state.arm(name, i64::MAX);
+    }
+    arm_state.save(&state.config.arm_path()).unwrap();
 }
 
 fn basic(credentials: &str) -> String {
@@ -111,30 +122,25 @@ async fn body_bytes(response: axum::response::Response) -> Vec<u8> {
         .to_vec()
 }
 
-const FAR: i64 = i64::MAX;
+const fn manifest_uri() -> &'static str {
+    "/_lanpull/share/reports/manifest.json"
+}
 
 #[tokio::test]
 async fn missing_credentials_are_rejected() {
-    let (state, _dir) = build(vec![account("alpha", "secret", None)], vec![("alpha", FAR)]);
-    let response = call(
-        &state,
-        request("GET", "/_lanpull/manifest.json", None, [127, 0, 0, 1]),
-    )
-    .await;
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
+    let response = call(&state, request("GET", manifest_uri(), None, [127, 0, 0, 1])).await;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
 async fn wrong_password_reports_bad_password() {
-    let (state, _dir) = build(vec![account("alpha", "secret", None)], vec![("alpha", FAR)]);
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
     let response = call(
         &state,
-        request(
-            "GET",
-            "/_lanpull/manifest.json",
-            Some("alpha:wrong"),
-            [127, 0, 0, 1],
-        ),
+        request("GET", manifest_uri(), Some("alpha:wrong"), [127, 0, 0, 1]),
     )
     .await;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -146,15 +152,10 @@ async fn wrong_password_reports_bad_password() {
 
 #[tokio::test]
 async fn unarmed_account_is_rejected() {
-    let (state, _dir) = build(vec![account("alpha", "secret", None)], vec![]);
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
     let response = call(
         &state,
-        request(
-            "GET",
-            "/_lanpull/manifest.json",
-            Some("alpha:secret"),
-            [127, 0, 0, 1],
-        ),
+        request("GET", manifest_uri(), Some("alpha:secret"), [127, 0, 0, 1]),
     )
     .await;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -162,16 +163,25 @@ async fn unarmed_account_is_rejected() {
 }
 
 #[tokio::test]
-async fn armed_account_reads_manifest() {
-    let (state, _dir) = build(vec![account("alpha", "secret", None)], vec![("alpha", FAR)]);
+async fn local_account_skips_arm_window() {
+    let mut alpha = account("alpha", "secret", None);
+    alpha.local = true;
+    let (state, _dir) = build(vec![alpha], "alpha reports\n");
     let response = call(
         &state,
-        request(
-            "GET",
-            "/_lanpull/manifest.json",
-            Some("alpha:secret"),
-            [127, 0, 0, 1],
-        ),
+        request("GET", manifest_uri(), Some("alpha:secret"), [127, 0, 0, 1]),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn armed_account_reads_manifest() {
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
+    let response = call(
+        &state,
+        request("GET", manifest_uri(), Some("alpha:secret"), [127, 0, 0, 1]),
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -181,11 +191,85 @@ async fn armed_account_reads_manifest() {
 }
 
 #[tokio::test]
+async fn filtered_manifest_omits_disallowed_paths() {
+    let (state, _dir) = build(
+        vec![account("alpha", "secret", None)],
+        "alpha reports:a.txt\n",
+    );
+    arm(&state, &["alpha"]);
+    let response = call(
+        &state,
+        request("GET", manifest_uri(), Some("alpha:secret"), [127, 0, 0, 1]),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response).await;
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let files = parsed["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0]["path"], "a.txt");
+}
+
+#[tokio::test]
+async fn disallowed_share_is_forbidden() {
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha *\n");
+    arm(&state, &["alpha"]);
+    let response = call(
+        &state,
+        request(
+            "GET",
+            "/_lanpull/share/other/manifest.json",
+            Some("alpha:secret"),
+            [127, 0, 0, 1],
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn account_without_rules_is_forbidden() {
+    let (state, _dir) = build(
+        vec![account("alpha", "secret", None)],
+        "someoneelse reports\n",
+    );
+    arm(&state, &["alpha"]);
+    let response = call(
+        &state,
+        request("GET", manifest_uri(), Some("alpha:secret"), [127, 0, 0, 1]),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response.headers().get(REASON_HEADER).unwrap(), "forbidden");
+}
+
+#[tokio::test]
+async fn disallowed_file_path_is_forbidden() {
+    let (state, _dir) = build(
+        vec![account("alpha", "secret", None)],
+        "alpha reports:a.txt\n",
+    );
+    arm(&state, &["alpha"]);
+    let response = call(
+        &state,
+        request(
+            "GET",
+            "/_lanpull/share/reports/file/sub/b.txt",
+            Some("alpha:secret"),
+            [127, 0, 0, 1],
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn range_request_is_partial() {
-    let (state, _dir) = build(vec![account("alpha", "secret", None)], vec![("alpha", FAR)]);
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
     let mut request = request(
         "GET",
-        "/_lanpull/file/a.txt",
+        "/_lanpull/share/reports/file/a.txt",
         Some("alpha:secret"),
         [127, 0, 0, 1],
     );
@@ -199,12 +283,13 @@ async fn range_request_is_partial() {
 
 #[tokio::test]
 async fn unknown_path_is_not_found() {
-    let (state, _dir) = build(vec![account("alpha", "secret", None)], vec![("alpha", FAR)]);
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
     let response = call(
         &state,
         request(
             "GET",
-            "/_lanpull/file/missing.txt",
+            "/_lanpull/share/reports/file/missing.txt",
             Some("alpha:secret"),
             [127, 0, 0, 1],
         ),
@@ -214,13 +299,14 @@ async fn unknown_path_is_not_found() {
 }
 
 #[tokio::test]
-async fn reserved_path_is_not_found() {
-    let (state, _dir) = build(vec![account("alpha", "secret", None)], vec![("alpha", FAR)]);
+async fn legacy_manifest_route_is_gone() {
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
     let response = call(
         &state,
         request(
             "GET",
-            "/_lanpull/file/%2e%2e%2fsecret",
+            "/_lanpull/manifest.json",
             Some("alpha:secret"),
             [127, 0, 0, 1],
         ),
@@ -231,15 +317,11 @@ async fn reserved_path_is_not_found() {
 
 #[tokio::test]
 async fn post_is_method_not_allowed() {
-    let (state, _dir) = build(vec![account("alpha", "secret", None)], vec![("alpha", FAR)]);
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
     let response = call(
         &state,
-        request(
-            "POST",
-            "/_lanpull/manifest.json",
-            Some("alpha:secret"),
-            [127, 0, 0, 1],
-        ),
+        request("POST", manifest_uri(), Some("alpha:secret"), [127, 0, 0, 1]),
     )
     .await;
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
@@ -247,16 +329,13 @@ async fn post_is_method_not_allowed() {
 
 #[tokio::test]
 async fn missing_manifest_is_unavailable() {
-    let (state, _dir) = build(vec![account("alpha", "secret", None)], vec![("alpha", FAR)]);
-    fs::remove_file(state.config.manifest_path()).unwrap();
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
+    let path: PathBuf = state.config.access_manifest_path("alpha", "reports");
+    fs::remove_file(path).unwrap();
     let response = call(
         &state,
-        request(
-            "GET",
-            "/_lanpull/manifest.json",
-            Some("alpha:secret"),
-            [127, 0, 0, 1],
-        ),
+        request("GET", manifest_uri(), Some("alpha:secret"), [127, 0, 0, 1]),
     )
     .await;
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -266,16 +345,12 @@ async fn missing_manifest_is_unavailable() {
 async fn ip_bound_account_rejects_foreign_address() {
     let (state, _dir) = build(
         vec![account("alpha", "secret", Some("10.0.0.5"))],
-        vec![("alpha", FAR)],
+        "alpha reports\n",
     );
+    arm(&state, &["alpha"]);
     let foreign = call(
         &state,
-        request(
-            "GET",
-            "/_lanpull/manifest.json",
-            Some("alpha:secret"),
-            [10, 0, 0, 9],
-        ),
+        request("GET", manifest_uri(), Some("alpha:secret"), [10, 0, 0, 9]),
     )
     .await;
     assert_eq!(foreign.status(), StatusCode::UNAUTHORIZED);
@@ -283,12 +358,7 @@ async fn ip_bound_account_rejects_foreign_address() {
 
     let allowed = call(
         &state,
-        request(
-            "GET",
-            "/_lanpull/manifest.json",
-            Some("alpha:secret"),
-            [10, 0, 0, 5],
-        ),
+        request("GET", manifest_uri(), Some("alpha:secret"), [10, 0, 0, 5]),
     )
     .await;
     assert_eq!(allowed.status(), StatusCode::OK);
@@ -296,12 +366,13 @@ async fn ip_bound_account_rejects_foreign_address() {
 
 #[tokio::test]
 async fn unbound_account_accepts_any_address() {
-    let (state, _dir) = build(vec![account("alpha", "secret", None)], vec![("alpha", FAR)]);
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
     let response = call(
         &state,
         request(
             "GET",
-            "/_lanpull/manifest.json",
+            manifest_uri(),
             Some("alpha:secret"),
             [192, 168, 1, 9],
         ),
@@ -312,15 +383,11 @@ async fn unbound_account_accepts_any_address() {
 
 #[tokio::test]
 async fn head_manifest_has_length() {
-    let (state, _dir) = build(vec![account("alpha", "secret", None)], vec![("alpha", FAR)]);
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
     let response = call(
         &state,
-        request(
-            "HEAD",
-            "/_lanpull/manifest.json",
-            Some("alpha:secret"),
-            [127, 0, 0, 1],
-        ),
+        request("HEAD", manifest_uri(), Some("alpha:secret"), [127, 0, 0, 1]),
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -329,15 +396,11 @@ async fn head_manifest_has_length() {
 
 #[tokio::test]
 async fn requests_are_audited() {
-    let (state, _dir) = build(vec![account("alpha", "secret", None)], vec![("alpha", FAR)]);
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
     let _ = call(
         &state,
-        request(
-            "GET",
-            "/_lanpull/manifest.json",
-            Some("alpha:secret"),
-            [127, 0, 0, 1],
-        ),
+        request("GET", manifest_uri(), Some("alpha:secret"), [127, 0, 0, 1]),
     )
     .await;
     let log = fs::read_to_string(&state.config.audit_log).unwrap();
@@ -346,16 +409,29 @@ async fn requests_are_audited() {
 }
 
 #[tokio::test]
+async fn forbidden_requests_are_audited_with_reason() {
+    let (state, _dir) = build(
+        vec![account("alpha", "secret", None)],
+        "someoneelse reports\n",
+    );
+    arm(&state, &["alpha"]);
+    let _ = call(
+        &state,
+        request("GET", manifest_uri(), Some("alpha:secret"), [127, 0, 0, 1]),
+    )
+    .await;
+    let log = fs::read_to_string(&state.config.audit_log).unwrap();
+    assert!(log.contains("\"status\":403"));
+    assert!(log.contains("\"reason\":\"forbidden\""));
+}
+
+#[tokio::test]
 async fn remove_client_revokes_immediately() {
-    let (state, _dir) = build(vec![account("alpha", "secret", None)], vec![("alpha", FAR)]);
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
     let first = call(
         &state,
-        request(
-            "GET",
-            "/_lanpull/manifest.json",
-            Some("alpha:secret"),
-            [127, 0, 0, 1],
-        ),
+        request("GET", manifest_uri(), Some("alpha:secret"), [127, 0, 0, 1]),
     )
     .await;
     assert_eq!(first.status(), StatusCode::OK);
@@ -366,12 +442,7 @@ async fn remove_client_revokes_immediately() {
 
     let second = call(
         &state,
-        request(
-            "GET",
-            "/_lanpull/manifest.json",
-            Some("alpha:secret"),
-            [127, 0, 0, 1],
-        ),
+        request("GET", manifest_uri(), Some("alpha:secret"), [127, 0, 0, 1]),
     )
     .await;
     assert_eq!(second.status(), StatusCode::UNAUTHORIZED);
@@ -379,15 +450,11 @@ async fn remove_client_revokes_immediately() {
 
 #[tokio::test]
 async fn disarm_takes_effect_immediately() {
-    let (state, _dir) = build(vec![account("alpha", "secret", None)], vec![("alpha", FAR)]);
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
     let first = call(
         &state,
-        request(
-            "GET",
-            "/_lanpull/manifest.json",
-            Some("alpha:secret"),
-            [127, 0, 0, 1],
-        ),
+        request("GET", manifest_uri(), Some("alpha:secret"), [127, 0, 0, 1]),
     )
     .await;
     assert_eq!(first.status(), StatusCode::OK);
@@ -396,12 +463,7 @@ async fn disarm_takes_effect_immediately() {
 
     let second = call(
         &state,
-        request(
-            "GET",
-            "/_lanpull/manifest.json",
-            Some("alpha:secret"),
-            [127, 0, 0, 1],
-        ),
+        request("GET", manifest_uri(), Some("alpha:secret"), [127, 0, 0, 1]),
     )
     .await;
     assert_eq!(second.status(), StatusCode::UNAUTHORIZED);

@@ -3,14 +3,18 @@
 //! The manifest is written to `$STATE_DIR/manifest.json`, never inside the
 //! share, and served virtually at `/_lanpull/manifest.json`.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
+use crate::access::Access;
 use crate::cache::Cache;
+use crate::clients::Clients;
+use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::hash::sha256_file;
 use crate::ignore::is_ignored;
@@ -154,4 +158,125 @@ pub fn generate(
     next_cache.save(cache_path)?;
 
     Ok((manifest, warnings))
+}
+
+/// Filter a share manifest down to the entries an account may read.
+pub fn filter(manifest: &Manifest, access: &Access, account: &str, share: &str) -> Manifest {
+    let files = manifest
+        .files
+        .iter()
+        .filter(|entry| access.allows(account, share, &entry.path))
+        .cloned()
+        .collect();
+    Manifest {
+        scheme: manifest.scheme.clone(),
+        generated_at: manifest.generated_at.clone(),
+        files,
+    }
+}
+
+/// Summary of a manifest regeneration.
+#[derive(Debug, Default)]
+pub struct Regenerated {
+    /// Number of files in each share's full manifest.
+    pub share_files: BTreeMap<String, usize>,
+    /// Number of files visible to each account, summed over its shares.
+    pub account_files: BTreeMap<String, usize>,
+    /// Non-fatal warnings.
+    pub warnings: Vec<String>,
+}
+
+/// Regenerate every share manifest and every per-account filtered manifest.
+///
+/// This is the single implementation behind `make rescan` and every CLI
+/// mutation that changes accounts or the access mapping.
+pub fn regenerate(config: &Config) -> Result<Regenerated> {
+    let access = Access::load(&config.access_path)?;
+    let clients = Clients::load(&config.clients_path)?;
+    let mut report = Regenerated::default();
+
+    let mut full: BTreeMap<String, Manifest> = BTreeMap::new();
+    for (share, path) in &config.shares {
+        let (manifest, warnings) = generate(
+            path,
+            &config.manifest_path(share),
+            &config.cache_path(share),
+        )?;
+        for path in &warnings.symlinks {
+            report
+                .warnings
+                .push(format!("{share}: symlink skipped: {path}"));
+        }
+        for path in &warnings.reserved {
+            report
+                .warnings
+                .push(format!("{share}: reserved-prefix entry ignored: {path}"));
+        }
+        for path in &warnings.modified_during_walk {
+            report
+                .warnings
+                .push(format!("{share}: file modified during walk: {path}"));
+        }
+        report
+            .share_files
+            .insert(share.clone(), manifest.files.len());
+        full.insert(share.clone(), manifest);
+    }
+
+    let mut expected: BTreeSet<PathBuf> = BTreeSet::new();
+    for account in clients.iter() {
+        if !access.has_rules(&account.name) {
+            report.warnings.push(format!(
+                "account {} has no access rules and can pull nothing",
+                account.name
+            ));
+            continue;
+        }
+        let mut visible = 0_usize;
+        for share in config.shares.keys() {
+            if !access.allows_share(&account.name, share) {
+                continue;
+            }
+            let Some(share_manifest) = full.get(share) else {
+                continue;
+            };
+            let filtered = filter(share_manifest, &access, &account.name, share);
+            visible = visible.saturating_add(filtered.files.len());
+            let path = config.access_manifest_path(&account.name, share);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let bytes = serde_json::to_vec_pretty(&filtered)?;
+            crate::atomic::write(&path, &bytes)?;
+            expected.insert(path);
+        }
+        report.account_files.insert(account.name.clone(), visible);
+    }
+
+    clean_access_dir(config, &expected)?;
+    Ok(report)
+}
+
+/// Remove per-account manifests that are no longer expected.
+fn clean_access_dir(config: &Config, expected: &BTreeSet<PathBuf>) -> Result<()> {
+    let dir = config.access_dir();
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    let mut directories: Vec<PathBuf> = Vec::new();
+    for entry in WalkDir::new(&dir).follow_links(false) {
+        let entry = entry.map_err(|e| Error::Io(std::io::Error::other(e.to_string())))?;
+        if entry.file_type().is_dir() {
+            directories.push(entry.path().to_path_buf());
+        } else if entry.file_type().is_file() && !expected.contains(entry.path()) {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    directories.sort();
+    for directory in directories.into_iter().rev() {
+        if directory != dir && fs::read_dir(&directory)?.next().is_none() {
+            fs::remove_dir(&directory)?;
+        }
+    }
+    Ok(())
 }

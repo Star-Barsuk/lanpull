@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::extract::{ConnectInfo, Path as AxumPath, State};
+use axum::extract::{ConnectInfo, Extension, Path as AxumPath, State};
 use axum::http::{header, HeaderMap, Method, Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::Response;
@@ -25,9 +25,10 @@ use tower_http::services::ServeFile;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::timeout::TimeoutLayer;
 
+use crate::access::Access;
 use crate::arm::ArmState;
 use crate::audit::{self, Record};
-use crate::clients::{Clients, Verify};
+use crate::clients::{Account, Clients, Verify};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::timeutil;
@@ -55,6 +56,10 @@ pub struct AppState {
     pub config: Arc<Config>,
 }
 
+/// The authenticated account name attached to a request by the `access` layer.
+#[derive(Debug, Clone)]
+struct User(String);
+
 /// A rejected authentication attempt.
 #[derive(Debug)]
 struct Failure {
@@ -67,10 +72,16 @@ struct Failure {
 /// Build the application router around the given state.
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route("/_lanpull/manifest.json", get(serve_manifest))
+        .route(
+            "/_lanpull/share/{share}/manifest.json",
+            get(serve_share_manifest),
+        )
+        .route(
+            "/_lanpull/share/{share}/file/{*path}",
+            get(serve_share_file),
+        )
         .route("/_lanpull/client/manifest.json", get(serve_bundle_manifest))
         .route("/_lanpull/client/{file}", get(serve_bundle_file))
-        .route("/_lanpull/file/{*path}", get(serve_share_file))
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(state.clone(), access))
         .layer(SetResponseHeaderLayer::overriding(
@@ -90,7 +101,7 @@ pub fn router(state: AppState) -> Router {
 async fn access(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    request: Request<Body>,
+    mut request: Request<Body>,
     next: Next,
 ) -> Response {
     let method = request.method().clone();
@@ -99,9 +110,14 @@ async fn access(
     let ip = peer.ip();
 
     match authenticate(&state, request.headers(), ip) {
-        Ok(user) => {
+        Ok(account) => {
+            let user = account.name;
+            request.extensions_mut().insert(User(user.clone()));
             let response = next.run(request).await;
             let bytes = response_bytes(&response);
+            let reason = (response.status() == StatusCode::FORBIDDEN)
+                .then_some("forbidden")
+                .map(str::to_string);
             write_audit(
                 &state,
                 &Record {
@@ -113,7 +129,7 @@ async fn access(
                     path,
                     status: response.status().as_u16(),
                     bytes,
-                    reason: None,
+                    reason,
                 },
             );
             response
@@ -144,7 +160,7 @@ fn authenticate(
     state: &AppState,
     headers: &HeaderMap,
     ip: IpAddr,
-) -> std::result::Result<String, Failure> {
+) -> std::result::Result<Account, Failure> {
     let Some((user, password)) = basic_credentials(headers) else {
         return Err(Failure {
             user: String::new(),
@@ -189,21 +205,23 @@ fn authenticate(
         }
     }
 
-    let armed = match ArmState::load(&state.config.arm_path()) {
-        Ok(arm) => arm.is_armed(&user, timeutil::now_unix()),
-        Err(e) => {
-            tracing::warn!("cannot read arm state: {e}");
-            false
+    if !account.local {
+        let armed = match ArmState::load(&state.config.arm_path()) {
+            Ok(arm) => arm.is_armed(&account.name, timeutil::now_unix()),
+            Err(e) => {
+                tracing::warn!("cannot read arm state: {e}");
+                false
+            }
+        };
+        if !armed {
+            return Err(Failure {
+                user: account.name,
+                reason: "not_armed".to_string(),
+            });
         }
-    };
-    if !armed {
-        return Err(Failure {
-            user,
-            reason: "not_armed".to_string(),
-        });
     }
 
-    Ok(user)
+    Ok(account)
 }
 
 /// Append an audit record, logging (but not failing) on error.
@@ -213,33 +231,58 @@ fn write_audit(state: &AppState, record: &Record) {
     }
 }
 
-/// Handler for `/_lanpull/manifest.json`.
-async fn serve_manifest(
+/// Handler for `/_lanpull/share/<share>/manifest.json`.
+async fn serve_share_manifest(
     State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    AxumPath(share): AxumPath<String>,
     method: Method,
     headers: HeaderMap,
 ) -> Response {
-    let path = state.config.manifest_path();
+    if !state.config.shares.contains_key(&share) {
+        return not_found().await;
+    }
+    match Access::load(&state.config.access_path) {
+        Ok(access) if access.allows_share(&user.0, &share) => {}
+        Ok(_) => return forbidden(),
+        Err(e) => {
+            tracing::warn!("cannot read access mapping: {e}");
+            return forbidden();
+        }
+    }
+    let path = state.config.access_manifest_path(&user.0, &share);
     match tokio::fs::metadata(&path).await {
         Ok(metadata) if metadata.is_file() => serve_file(path, method, headers).await,
         _ => text_response(
             StatusCode::SERVICE_UNAVAILABLE,
-            "server has no manifest; ask the operator to run make rescan",
+            "server has no manifest for this account; ask the operator to run make rescan",
         ),
     }
 }
 
-/// Handler for `/_lanpull/file/<path>`.
+/// Handler for `/_lanpull/share/<share>/file/<path>`.
 async fn serve_share_file(
     State(state): State<AppState>,
-    AxumPath(path): AxumPath<String>,
+    Extension(user): Extension<User>,
+    AxumPath((share, path)): AxumPath<(String, String)>,
     method: Method,
     headers: HeaderMap,
 ) -> Response {
+    let Some(root) = state.config.shares.get(&share) else {
+        return not_found().await;
+    };
     if relpath::validate(&path).is_err() {
         return not_found().await;
     }
-    let Ok(full) = relpath::join(&state.config.share_dir, &path) else {
+    match Access::load(&state.config.access_path) {
+        Ok(access) if access.allows(&user.0, &share, &path) => {}
+        Ok(_) => return forbidden(),
+        Err(e) => {
+            tracing::warn!("cannot read access mapping: {e}");
+            return forbidden();
+        }
+    }
+    let Ok(full) = relpath::join(root, &path) else {
         return not_found().await;
     };
     match tokio::fs::symlink_metadata(&full).await {
@@ -288,6 +331,16 @@ async fn serve_bundle_file(
 /// Fallback handler for unknown paths.
 async fn not_found() -> Response {
     text_response(StatusCode::NOT_FOUND, "not found")
+}
+
+/// Build a `403` response for a disallowed share or path.
+fn forbidden() -> Response {
+    Response::builder()
+        .status(StatusCode::FORBIDDEN)
+        .header(REASON_HEADER, "forbidden")
+        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+        .body(Body::from("forbidden\n"))
+        .unwrap_or_else(|_| Response::new(Body::empty()))
 }
 
 /// Serve a file through `tower-http`'s `ServeFile`.

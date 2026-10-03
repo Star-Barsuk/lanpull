@@ -4,11 +4,13 @@
 //! remaining subcommands manage the manifest, accounts, the arm window, the
 //! audit report, the certificate, and operator status.
 
+use std::fmt::Write as _;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use lanpull::access::{Access, Glob, Rule};
 use lanpull::arm::ArmState;
 use lanpull::clients::{self, Account, Clients};
 use lanpull::config::Config;
@@ -42,16 +44,37 @@ enum Command {
         /// Optional source IP the account is bound to.
         #[arg(long)]
         ip: Option<IpAddr>,
-        /// The client's local mirror directory, written to `OUTPUT`.
+        /// The client's local mirror base directory; each share maps to a
+        /// subdirectory of it.
         #[arg(long)]
         output: PathBuf,
+        /// Access rule `<share>[:<glob>]` (repeatable).
+        #[arg(long = "share")]
+        share: Vec<String>,
+        /// Loopback (self-share) account: exempt from the arm window.
+        #[arg(long)]
+        local: bool,
+    },
+    /// Add an access rule to an existing account.
+    Grant {
+        /// Account name.
+        name: String,
+        /// Rule `<share>[:<glob>]`.
+        rule: String,
+    },
+    /// Remove access rules from an account (all rules when omitted).
+    Revoke {
+        /// Account name.
+        name: String,
+        /// Rule `<share>[:<glob>]` to remove.
+        rule: Option<String>,
     },
     /// Revoke an account.
     RemoveClient {
         /// Account name.
         name: String,
     },
-    /// List accounts.
+    /// List accounts, their IPs, and their access rules.
     ListClients,
     /// Rotate one account password.
     Passwd {
@@ -119,7 +142,15 @@ async fn run(cli: Cli) -> Result<()> {
             http::serve(config).await
         }
         Command::Manifest => manifest_command(&cli.config),
-        Command::AddClient { name, ip, output } => add_client(&cli.config, &name, ip, &output),
+        Command::AddClient {
+            name,
+            ip,
+            output,
+            share,
+            local,
+        } => add_client(&cli.config, &name, ip, &output, &share, local),
+        Command::Grant { name, rule } => grant(&cli.config, &name, &rule),
+        Command::Revoke { name, rule } => revoke(&cli.config, &name, rule.as_deref()),
         Command::RemoveClient { name } => remove_client(&cli.config, &name),
         Command::ListClients => list_clients(&cli.config),
         Command::Passwd { name } => passwd(&cli.config, &name),
@@ -131,47 +162,40 @@ async fn run(cli: Cli) -> Result<()> {
     }
 }
 
-/// Regenerate the manifest.
+/// Regenerate the per-share and per-account manifests.
 fn manifest_command(config_path: &Path) -> Result<()> {
     let config = Config::load(config_path)?;
-    let (manifest, warnings) = manifest::generate(
-        &config.share_dir,
-        &config.manifest_path(),
-        &config.cache_path(),
-    )?;
-    let total: u64 = manifest
-        .files
-        .iter()
-        .fold(0_u64, |acc, file| acc.saturating_add(file.size));
-    tracing::info!(
-        "manifest: {} files, {} bytes, generated_at {}",
-        manifest.files.len(),
-        total,
-        manifest.generated_at
-    );
-    emit_warnings(&warnings);
+    let report = manifest::regenerate(&config)?;
+    for (share, count) in &report.share_files {
+        tracing::info!("manifest {share}: {count} files");
+    }
+    for (account, count) in &report.account_files {
+        tracing::info!("access {account}: {count} files visible");
+    }
+    for warning in &report.warnings {
+        tracing::warn!("{warning}");
+    }
     Ok(())
 }
 
-/// Print manifest warnings.
-fn emit_warnings(warnings: &manifest::Warnings) {
-    for path in &warnings.symlinks {
-        tracing::warn!("symlink skipped: {path}");
-    }
-    for path in &warnings.reserved {
-        tracing::warn!("reserved-prefix entry ignored: {path}");
-    }
-    for path in &warnings.modified_during_walk {
-        tracing::warn!("file modified during walk: {path}");
-    }
-}
-
 /// Create an account and stage a client folder.
-fn add_client(config_path: &Path, name: &str, ip: Option<IpAddr>, output: &Path) -> Result<()> {
+fn add_client(
+    config_path: &Path,
+    name: &str,
+    ip: Option<IpAddr>,
+    output: &Path,
+    share_specs: &[String],
+    local: bool,
+) -> Result<()> {
     let config = Config::load(config_path)?;
     let mut accounts = Clients::load(&config.clients_path)?;
     if accounts.get(name).is_some() {
         return Err(Error::Account(format!("account {name} already exists")));
+    }
+
+    let mut rules = Vec::new();
+    for spec in share_specs {
+        rules.push(Rule::parse(spec)?);
     }
 
     let password = clients::generate_password();
@@ -180,8 +204,15 @@ fn add_client(config_path: &Path, name: &str, ip: Option<IpAddr>, output: &Path)
         name: name.to_string(),
         hash,
         allowed_ip: ip,
+        local,
     });
     accounts.save(&config.clients_path)?;
+
+    let mut access = Access::load(&config.access_path)?;
+    for rule in rules {
+        access.add_rule(name, rule);
+    }
+    access.save(&config.access_path)?;
 
     let staging = config.state_dir.join("client-ready").join(name);
     std::fs::create_dir_all(&staging)?;
@@ -195,22 +226,81 @@ fn add_client(config_path: &Path, name: &str, ip: Option<IpAddr>, output: &Path)
     std::fs::copy(&pull_source, staging.join("pull.py"))?;
     set_executable(&staging.join("pull.py"))?;
 
-    let client_conf = format!(
-        "SERVER_URL=https://{}:{}\nOUTPUT={}\n",
-        config.server_ip,
-        config.port,
-        output.display()
-    );
-    std::fs::write(staging.join("lanpull.conf"), client_conf)?;
-
+    std::fs::write(
+        staging.join("lanpull.conf"),
+        client_conf(&config, name, output)?,
+    )?;
     let auth = format!("{name}:{password}\n");
     lanpull::atomic::write_private(&staging.join("auth"), auth.as_bytes())?;
-
     std::fs::copy(&config.cert_path, staging.join("server.crt"))?;
+
+    manifest::regenerate(&config)?;
 
     tracing::info!("account {name} created");
     tracing::info!("client folder staged at {}", staging.display());
     tracing::info!("copy that folder to the machine, then run pull.py there");
+    Ok(())
+}
+
+/// Build the staged client config mapping each visible share to a subdirectory.
+fn client_conf(config: &Config, account: &str, output: &Path) -> Result<String> {
+    let access = Access::load(&config.access_path)?;
+    if !access.has_rules(account) {
+        return Err(Error::Account(format!(
+            "account {account} has no access rules; pass --share"
+        )));
+    }
+    let mut text = format!(
+        "# Generated by lanpull add-client for {account}.\nSERVER_URL=https://{}:{}\n",
+        config.server_ip, config.port
+    );
+    for share in config.shares.keys() {
+        if access.allows_share(account, share) {
+            let _ = writeln!(text, "MIRROR_{share}={}", output.join(share).display());
+        }
+    }
+    Ok(text)
+}
+
+/// Add one access rule to an existing account.
+fn grant(config_path: &Path, name: &str, spec: &str) -> Result<()> {
+    let config = Config::load(config_path)?;
+    let accounts = Clients::load(&config.clients_path)?;
+    if accounts.get(name).is_none() {
+        return Err(Error::Account(format!("no such account: {name}")));
+    }
+    let rule = Rule::parse(spec)?;
+    let mut access = Access::load(&config.access_path)?;
+    access.add_rule(name, rule);
+    access.save(&config.access_path)?;
+    manifest::regenerate(&config)?;
+    tracing::info!("granted {name} {spec}");
+    Ok(())
+}
+
+/// Remove access rules from an account.
+fn revoke(config_path: &Path, name: &str, spec: Option<&str>) -> Result<()> {
+    let config = Config::load(config_path)?;
+    let accounts = Clients::load(&config.clients_path)?;
+    if accounts.get(name).is_none() {
+        return Err(Error::Account(format!("no such account: {name}")));
+    }
+    let mut access = Access::load(&config.access_path)?;
+    let removed = match spec {
+        None => access.remove_account(name),
+        Some(spec) => {
+            let rule = Rule::parse(spec)?;
+            let share = rule.share.as_deref();
+            let glob = rule.glob.as_ref().map(Glob::as_str);
+            access.remove_rules(name, share, glob)
+        }
+    };
+    if !removed {
+        return Err(Error::Account(format!("no matching rule for {name}")));
+    }
+    access.save(&config.access_path)?;
+    manifest::regenerate(&config)?;
+    tracing::info!("revoked rules for {name}");
     Ok(())
 }
 
@@ -231,11 +321,22 @@ fn remove_client(config_path: &Path, name: &str) -> Result<()> {
         return Err(Error::Account(format!("no such account: {name}")));
     }
     accounts.save(&config.clients_path)?;
+
+    let mut access = Access::load(&config.access_path)?;
+    access.remove_account(name);
+    access.save(&config.access_path)?;
+
+    let dir = config.access_dir().join(name);
+    if dir.is_dir() {
+        std::fs::remove_dir_all(dir)?;
+    }
+    manifest::regenerate(&config)?;
+
     tracing::info!("account {name} removed");
     Ok(())
 }
 
-/// List accounts.
+/// List accounts with their IPs and access rules.
 fn list_clients(config_path: &Path) -> Result<()> {
     let config = Config::load(config_path)?;
     let accounts = Clients::load(&config.clients_path)?;
@@ -243,11 +344,14 @@ fn list_clients(config_path: &Path) -> Result<()> {
         tracing::info!("no accounts");
         return Ok(());
     }
+    let access = Access::load(&config.access_path)?;
     for account in accounts.iter() {
         let ip = account
             .allowed_ip
             .map_or_else(|| "any".to_string(), |ip| ip.to_string());
-        tracing::info!("{} {}", account.name, ip);
+        let scope = if account.local { " local" } else { "" };
+        let rules: Vec<String> = access.rules(&account.name).iter().map(Rule::spec).collect();
+        tracing::info!("{} {}{} [{}]", account.name, ip, scope, rules.join(", "));
     }
     Ok(())
 }
@@ -293,7 +397,9 @@ fn arm(config_path: &Path, name: Option<&str>, all: bool, ttl: &str) -> Result<(
             return Err(Error::Account("no accounts to arm".to_string()));
         }
         for account in accounts.iter() {
-            state.arm(&account.name, expires);
+            if !account.local {
+                state.arm(&account.name, expires);
+            }
         }
     } else {
         let name = name.ok_or_else(|| Error::Account("provide a name or --all".to_string()))?;

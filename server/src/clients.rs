@@ -30,6 +30,8 @@ pub struct Account {
     pub hash: String,
     /// Optional source IP the account is bound to.
     pub allowed_ip: Option<IpAddr>,
+    /// Local (loopback) account: exempt from the arm window.
+    pub local: bool,
 }
 
 /// The outcome of a credential check.
@@ -75,9 +77,18 @@ impl Clients {
             text.push_str(&account.name);
             text.push(':');
             text.push_str(&account.hash);
-            if let Some(ip) = account.allowed_ip {
-                text.push(':');
-                text.push_str(&ip.to_string());
+            match (account.allowed_ip, account.local) {
+                (Some(ip), false) => {
+                    text.push(':');
+                    text.push_str(&ip.to_string());
+                }
+                (Some(ip), true) => {
+                    text.push(':');
+                    text.push_str(&ip.to_string());
+                    text.push_str(":local");
+                }
+                (None, false) => {}
+                (None, true) => text.push_str("::local"),
             }
             text.push('\n');
         }
@@ -145,7 +156,7 @@ fn parse(text: &str) -> Clients {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let mut parts = line.splitn(3, ':');
+        let mut parts = line.splitn(4, ':');
         let name = match parts.next() {
             Some(name) if !name.is_empty() => name.to_string(),
             _ => continue,
@@ -155,17 +166,18 @@ fn parse(text: &str) -> Clients {
             _ => continue,
         };
         let allowed_ip = match parts.next() {
-            None => None,
-            Some(field) if field.is_empty() || field == "*" => None,
+            None | Some("" | "*") => None,
             Some(field) => match field.parse::<IpAddr>() {
                 Ok(ip) => Some(ip),
                 Err(_) => continue,
             },
         };
+        let local = matches!(parts.next(), Some("local"));
         clients.insert(Account {
             name,
             hash,
             allowed_ip,
+            local,
         });
     }
     clients
