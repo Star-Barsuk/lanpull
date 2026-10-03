@@ -1,43 +1,33 @@
 # lanpull root Makefile.
-# Thin forwarder: the server and the client each have their own Makefile.
-# Server targets are forwarded so the documented `make <target>` commands keep
-# working from the repository root.
+#
+# Thin forwarder. Server targets are reachable as-is, client targets are
+# prefixed with `client-` (for example `make client-lint`), and `ci`/`setup`
+# run both sides. The target list is not duplicated here: `help` asks each
+# side, so the surface cannot drift.
 
 SHELL := /bin/sh
 
-SERVER_TARGETS := deps build install install-system up down restart status rescan \
-                  add-client remove-client list-clients passwd arm disarm \
-                  report cert client-bundle logs clean config distclean \
-                  uninstall wipe wipe-system \
-                  fmt fmt-check lint doc test deny audit audit-bin geiger security
-
-CLIENT_TARGETS := client-lint client-typecheck client-test client-audit
-
-.PHONY: help ci $(SERVER_TARGETS) $(CLIENT_TARGETS)
+.PHONY: help setup ci
 
 help: ## Show available targets
-	@printf 'Server targets (forwarded to server/):\n'
-	@printf '  %s\n' '$(SERVER_TARGETS)'
-	@printf '\nClient targets (forwarded to client/):\n'
-	@printf '  client-lint client-typecheck client-test client-audit\n'
+	@printf 'Server targets:\n'
+	@$(MAKE) --no-print-directory -C server help
+	@printf '\nClient targets (make client-<target>):\n'
+	@$(MAKE) --no-print-directory -C client help
 	@printf '\nOther:\n'
-	@printf '  ci   Run every quality and security gate on both sides\n'
+	@printf '  %-16s %s\n' ci "Run every quality and security gate on both sides"
+	@printf '  %-16s %s\n' setup "Install both toolchains"
 
-$(SERVER_TARGETS):
-	@$(MAKE) --no-print-directory -C server $@
-
-client-lint:
-	@$(MAKE) --no-print-directory -C client lint
-
-client-typecheck:
-	@$(MAKE) --no-print-directory -C client typecheck
-
-client-test:
-	@$(MAKE) --no-print-directory -C client test
-
-client-audit:
-	@$(MAKE) --no-print-directory -C client audit
+setup: ## Install both toolchains
+	@$(MAKE) --no-print-directory -C server setup
+	@$(MAKE) --no-print-directory -C client setup
 
 ci: ## Run every quality and security gate on both sides
 	@$(MAKE) --no-print-directory -C server ci
 	@$(MAKE) --no-print-directory -C client ci
+
+client-%:
+	@$(MAKE) --no-print-directory -C client $(patsubst client-%,%,$@)
+
+%:
+	@$(MAKE) --no-print-directory -C server $@

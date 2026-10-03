@@ -1,11 +1,14 @@
 # lanpull client Makefile.
 # Static analysis, tests, and dependency audit for the Python client.
-# The tools live in a uv-managed virtual environment (`make setup`).
+#
+# The gates bootstrap their own uv-managed virtual environment: the stamp file
+# is a prerequisite of every gate, so `make ci` works from a clean tree.
 
 SHELL := /bin/sh
 
 VENV       ?= .venv
 BIN        := $(VENV)/bin
+STAMP      := $(VENV)/.stamp
 UV         ?= uv
 PYTHON     := $(BIN)/python
 RUFF       := $(BIN)/ruff
@@ -16,23 +19,26 @@ PIP_AUDIT  := $(BIN)/pip-audit
 .PHONY: help setup lint typecheck test audit clean ci
 
 help: ## Show available targets
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
+	@awk 'BEGIN { FS = " ## " } /^[a-zA-Z0-9_-]+:.*## / { split($$1, t, ":"); printf "  %-14s %s\n", t[1], $$2 }' $(MAKEFILE_LIST)
 
-setup: ## Create the dev environment and install pinned tools
-	$(UV) venv $(VENV)
+$(STAMP): requirements-dev.txt
+	@test -d $(VENV) || $(UV) venv $(VENV)
 	$(UV) pip install --python $(PYTHON) -r requirements-dev.txt
+	@touch $(STAMP)
 
-lint: ## Lint and format-check the client
+setup: $(STAMP) ## Create the dev environment and install pinned tools
+
+lint: $(STAMP) ## Lint and format-check the client
 	$(RUFF) check .
 	$(RUFF) format --check .
 
-typecheck: ## Static type-check the client
+typecheck: $(STAMP) ## Static type-check the client
 	$(MYPY) .
 
-test: ## Run the client tests
+test: $(STAMP) ## Run the client tests
 	$(PYTEST)
 
-audit: ## Audit the development tools for known vulnerabilities
+audit: $(STAMP) ## Audit the development tools for known vulnerabilities
 	$(PIP_AUDIT) -r requirements-dev.txt
 
 clean: ## Remove the virtual environment and Python caches
