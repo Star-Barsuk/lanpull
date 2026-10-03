@@ -14,7 +14,6 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::ConnectInfo;
@@ -118,9 +117,7 @@ fn build(accounts: Vec<Account>, access_text: &str) -> (AppState, tempfile::Temp
 
     lanpull::manifest::regenerate(&config).unwrap();
 
-    let state = AppState {
-        config: Arc::new(config),
-    };
+    let state = AppState::new(config);
     (state, dir)
 }
 
@@ -130,6 +127,13 @@ fn arm(state: &AppState, names: &[&str]) {
         arm_state.arm(name, i64::MAX);
     }
     arm_state.save(&state.config.arm_path()).unwrap();
+}
+
+fn stage_bundle(state: &AppState) {
+    let dir = state.config.bundle_dir();
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("VERSION"), b"9.9.9\n").unwrap();
+    fs::write(dir.join("pull.py"), b"print('hi')\n").unwrap();
 }
 
 fn basic(credentials: &str) -> String {
@@ -190,6 +194,30 @@ async fn wrong_password_reports_bad_password() {
     assert_eq!(
         response.headers().get(REASON_HEADER).unwrap(),
         "bad_password"
+    );
+}
+
+#[tokio::test]
+async fn repeated_failures_are_rate_limited() {
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
+    for _ in 0..10 {
+        let response = call(
+            &state,
+            request("GET", manifest_uri(), Some("alpha:wrong"), [127, 0, 0, 1]),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+    let response = call(
+        &state,
+        request("GET", manifest_uri(), Some("alpha:secret"), [127, 0, 0, 1]),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response.headers().get(REASON_HEADER).unwrap(),
+        "rate_limited"
     );
 }
 
@@ -322,6 +350,93 @@ async fn range_request_is_partial() {
     let response = call(&state, request).await;
     assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
     assert_eq!(body_bytes(response).await, b"hello");
+}
+
+#[tokio::test]
+async fn symlink_file_is_not_served() {
+    let (state, dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
+    let outside = dir.path().join("secret.txt");
+    fs::write(&outside, b"secret").unwrap();
+    let link = state.config.shares.get("reports").unwrap().join("link.txt");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    let response = call(
+        &state,
+        request(
+            "GET",
+            "/_lanpull/share/reports/file/link.txt",
+            Some("alpha:secret"),
+            [127, 0, 0, 1],
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn bundle_manifest_and_missing_bundle() {
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
+
+    let missing = call(
+        &state,
+        request(
+            "GET",
+            "/_lanpull/client/manifest.json",
+            Some("alpha:secret"),
+            [127, 0, 0, 1],
+        ),
+    )
+    .await;
+    assert_eq!(missing.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    stage_bundle(&state);
+    let response = call(
+        &state,
+        request(
+            "GET",
+            "/_lanpull/client/manifest.json",
+            Some("alpha:secret"),
+            [127, 0, 0, 1],
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response).await;
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(parsed["version"], "9.9.9");
+}
+
+#[tokio::test]
+async fn bundle_file_is_served() {
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
+    stage_bundle(&state);
+
+    let response = call(
+        &state,
+        request(
+            "GET",
+            "/_lanpull/client/pull.py",
+            Some("alpha:secret"),
+            [127, 0, 0, 1],
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_bytes(response).await, b"print('hi')\n");
+
+    let unknown = call(
+        &state,
+        request(
+            "GET",
+            "/_lanpull/client/nope",
+            Some("alpha:secret"),
+            [127, 0, 0, 1],
+        ),
+    )
+    .await;
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

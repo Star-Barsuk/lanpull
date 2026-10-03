@@ -260,13 +260,6 @@ impl Access {
             .push(rule);
     }
 
-    /// Iterate over accounts that have rules, in name order.
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &[Rule])> {
-        self.rules
-            .iter()
-            .map(|(account, rules)| (account.as_str(), rules.as_slice()))
-    }
-
     /// Return `true` when no account has any rule.
     pub fn is_empty(&self) -> bool {
         self.rules.is_empty()
@@ -355,8 +348,8 @@ mod tests {
             ("laptop", "media:music/**"),
             ("desktop", "*"),
         ]);
-        assert_eq!(a.iter().count(), 2);
         assert_eq!(a.rules("laptop").len(), 2);
+        assert_eq!(a.rules("desktop").len(), 1);
         assert!(a.allows("laptop", "media", "music/x"));
     }
 

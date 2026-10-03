@@ -18,7 +18,7 @@ use crate::policy::Policy;
 use crate::relpath;
 use crate::timeutil;
 
-/// Maximum Unix time value, used as a neutral starting point.
+/// Neutral starting point for the newest-mtime scan (any real mtime is above it).
 const MIN_MTIME: i64 = i64::MIN;
 
 /// Warnings suitable for server startup.

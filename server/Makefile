@@ -29,6 +29,7 @@ UNIT           ?= /etc/systemd/system/$(SERVICE)
 OPERATOR       ?= $(if $(SUDO_USER),$(SUDO_USER),$(shell id -un))
 OPERATOR_GROUP ?= $(shell id -gn $(OPERATOR) 2>/dev/null || id -gn)
 LANPULL_CLIENTS ?= ../config/lanpull.clients
+LANPULL_ACCESS  ?= ../config/lanpull.access.json
 CLIENT_DIR     ?= ../client
 STATE_DIR      ?= /var/lib/lanpull
 STATE_DIR_ABS  := $(abspath $(STATE_DIR))
@@ -49,7 +50,7 @@ UNINSTALL_CMD = $(SCRIPTS)/uninstall.sh --binary "$(LANPULL)" --unit "$(UNIT)" \
 .PHONY: help setup build config client-bundle install uninstall wipe \
         up down restart logs status rescan cert \
         add-client remove-client list-clients access passwd arm disarm report \
-        clean distclean confirm check-tools \
+        clean distclean confirm check-tools check-scripts e2e \
         fmt fmt-check lint doc test deny audit audit-bin geiger security ci
 
 help: ## Show available targets
@@ -144,13 +145,13 @@ clean: ## Remove build artifacts and caches (no root)
 confirm: ## Refuse a destructive target unless CONFIRM=1 is given
 	@if [ "$(CONFIRM)" != "1" ]; then \
 		echo "lanpull: this target deletes configuration, credentials, and/or state."; \
-		echo "         re-run with CONFIRM=1 to proceed (SHARE=1 also removes SHARE_DIR)."; \
+		echo "         re-run with CONFIRM=1 to proceed (SHARE=1 also removes the share directories)."; \
 		exit 1; \
 	fi
 
-distclean: confirm ## Remove build artifacts, generated config, and accounts (CONFIRM=1)
+distclean: confirm ## Remove build artifacts, generated config, policy, and accounts (CONFIRM=1)
 	$(MAKE) clean
-	rm -f $(LANPULL_CONF) $(LANPULL_CLIENTS)
+	rm -f $(LANPULL_CONF) $(LANPULL_CLIENTS) $(LANPULL_ACCESS)
 	$(SCRIPTS)/distclean.sh ..
 
 check-tools: ## Fail early when a gate tool is missing (run make setup)
@@ -159,6 +160,15 @@ check-tools: ## Fail early when a gate tool is missing (run make setup)
 			echo "lanpull: missing $$tool; run 'make setup'" >&2; exit 1; \
 		}; \
 	done
+
+check-scripts: ## Parse the server shell scripts (shellcheck runs when installed)
+	@for script in $(SCRIPTS)/*.sh; do sh -n "$$script" || exit 1; done
+	@if command -v shellcheck >/dev/null 2>&1; then \
+		shellcheck -x -s sh -P $(SCRIPTS) $(SCRIPTS)/*.sh || exit 1; \
+	fi
+
+e2e: build ## Run the loopback end-to-end smoke test (dev only; needs python3)
+	$(SCRIPTS)/e2e.sh "$(abspath $(BINARY))" "$(abspath $(CLIENT_DIR))"
 
 fmt: ## Format Rust sources
 	$(CARGO) fmt --all
@@ -189,4 +199,4 @@ geiger: ## Report unsafe usage across the dependency tree
 
 security: deny audit audit-bin geiger ## Run every supply-chain security check
 
-ci: check-tools fmt-check lint doc test security ## Run every Rust quality and security gate
+ci: check-tools check-scripts fmt-check lint doc test security ## Run every Rust quality and security gate

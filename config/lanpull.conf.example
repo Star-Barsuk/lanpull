@@ -4,13 +4,15 @@
 # The real file is not committed and must be readable only by its owner
 # (mode 600).
 
-# Directory holding the files to distribute. Can be any path, outside the
-# project. The manifest is NOT written here; it lives under STATE_DIR.
-SHARE_DIR=/srv/lanpull/share
+# One SHARE_<name>=<path> key per share; at least one is required. The name
+# matches ^[a-z0-9][a-z0-9_-]*$ and is the share identity used by clients and
+# by the access policy. A share can be any path outside the project. Manifests
+# are NOT written here; they live under STATE_DIR.
+SHARE_default=/srv/lanpull/share
 
 # Internal state (manifest, hash cache, TLS material, arm state, audit log).
-# Must be OUTSIDE SHARE_DIR so it is never treated as share content. The server
-# user needs write access.
+# Must be OUTSIDE every share root so it is never treated as share content. The
+# server user needs write access.
 STATE_DIR=/var/lib/lanpull
 
 # Address and port the server listens on. Listen on all interfaces and restrict
@@ -26,10 +28,11 @@ SERVER_IP=<server-ip>
 CERT_PATH=/var/lib/lanpull/server.crt
 KEY_PATH=/var/lib/lanpull/server.key
 
-# Per-client accounts: one "user:argon2hash[:allowed_ip]" line per machine.
-# The optional third field binds the account to a source IP; omit it (or use
-# "*") to accept the account from any address on the LAN (access is then gated
-# by the password and the arm window). Managed by `make add-client` /
+# Per-client accounts: one "user:argon2hash[:allowed_ip][:local]" line per
+# machine. The optional third field binds the account to a source IP; omit it
+# (or use "*") to accept the account from any address on the LAN (access is then
+# gated by the password and the arm window). A trailing "local" marks a
+# self-share account, exempt from the arm window. Managed by `make add-client` /
 # `remove-client` / `passwd`; mode 600; never committed. Authentication is
 # mandatory, so the server refuses to start when this file is missing or empty.
 # Relative paths are resolved against the directory of this config file.

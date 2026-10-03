@@ -402,6 +402,27 @@ mod tests {
     }
 
     #[test]
+    fn remove_account_drops_deltas_and_prunes_empty_shares() {
+        let mut policy = Policy::new();
+        let share = policy.share_mut("cube").unwrap();
+        share.public.insert("keep.pdf".to_string());
+        share.add_for("alpha", "only.pdf".to_string());
+
+        assert!(policy.remove_account("alpha"));
+        assert!(!policy.shares["cube"].clients.contains_key("alpha"));
+        assert!(policy.shares["cube"].public.contains("keep.pdf"));
+        assert!(!policy.remove_account("alpha"));
+
+        let mut empty = Policy::new();
+        empty
+            .share_mut("cube")
+            .unwrap()
+            .add_for("alpha", "x.pdf".to_string());
+        assert!(empty.remove_account("alpha"));
+        assert!(empty.shares.is_empty());
+    }
+
+    #[test]
     fn whole_share_glob_is_expressible() {
         let mut policy = Policy::new();
         policy

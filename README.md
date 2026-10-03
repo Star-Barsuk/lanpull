@@ -195,7 +195,7 @@ The removal levels are cumulative, and the destructive ones require `CONFIRM=1`:
 
 ```bash
 make clean                      # build artifacts and caches only (no root)
-make distclean CONFIRM=1        # clean + config/lanpull.conf + config/lanpull.clients
+make distclean CONFIRM=1        # clean + config/lanpull.{conf,clients} + access.json
 make uninstall CONFIRM=1        # binary, systemd unit, and $STATE_DIR
 make uninstall CONFIRM=1 SHARE=1   # also removes every share directory
 make wipe CONFIRM=1             # distclean + uninstall: everything lanpull created
@@ -437,10 +437,14 @@ Each side carries its own Makefile and its own static-analysis configuration;
 the root `Makefile` forwards to both.
 
 ```bash
-make -C server ci    # rustfmt, Clippy, rustdoc, tests, deny, audit, audit bin, geiger
+make -C server ci    # shell-script syntax, rustfmt, Clippy, rustdoc, tests, deny, audit, audit bin, geiger
 make -C client ci    # ruff check/format, mypy --strict, pytest, pip-audit
-make -C server ci && make -C client ci
+make -C server e2e   # loopback end-to-end round of the real server and pull.py
+make ci              # both sides' quality gates
 ```
+
+`make -C server check-scripts` always parses the shell scripts and also runs
+`shellcheck` when it is installed.
 
 The gates locate their tools themselves: the server Makefile finds the Rust
 toolchain in `$CARGO_HOME/bin` (no `PATH` edit needed), and the client gates

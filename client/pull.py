@@ -45,9 +45,8 @@ CERT_NAME = "server.crt"
 STATE_NAME = "state.json"
 
 LOCK_NAME = ".lanpull.lock"
-MANIFEST_TMP = ".manifest.tmp"
 PARTIALS_NAME = ".lanpull.partials.json"
-INTERNAL = frozenset({LOCK_NAME, MANIFEST_TMP, PARTIALS_NAME})
+INTERNAL = frozenset({LOCK_NAME, PARTIALS_NAME})
 
 RESERVED = "_lanpull"
 CHUNK = 64 * 1024
@@ -263,6 +262,8 @@ def auth_failure_message(response: http.client.HTTPResponse, credentials: str) -
         )
     if reason == "foreign_ip":
         return f"ERROR: account {user} is not allowed from this address (401)"
+    if reason == "rate_limited":
+        return "ERROR: too many failed attempts (401); wait a minute and retry"
     return "ERROR: authentication failed (401)"
 
 
@@ -312,6 +313,8 @@ class HttpClient:
             response = connection.getresponse()
             if response.status == 401:
                 raise FatalError(auth_failure_message(response, self._credentials))
+            if response.status == 403:
+                raise FatalError("ERROR: access denied (403); ask the operator to grant access")
             if response.status == 503:
                 raise FatalError(f"ERROR: {unavailable}")
             if response.status != 200:
@@ -494,6 +497,8 @@ def download(
             response = connection.getresponse()
             if response.status == 401:
                 raise FatalError(auth_failure_message(response, client.credentials))
+            if response.status == 403:
+                raise PerFileError(f"ERROR: {entry.path}: access denied (403)")
             if response.status == 416:
                 response.read()
                 part.unlink(missing_ok=True)
@@ -637,7 +642,6 @@ def run_share(
             manifest_path(share),
             "server has no manifest; ask the operator to run make rescan",
         )
-        (output / MANIFEST_TMP).write_text(json.dumps(data), encoding="utf-8")
         generated_at = data.get("generated_at")
         _scheme, entries = parse_manifest(data)
 

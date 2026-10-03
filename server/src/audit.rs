@@ -3,6 +3,7 @@
 //! Every request, including rejected ones, is appended to
 //! `$STATE_DIR/access.log` as one JSON line. `lanpull report` summarizes it.
 
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
@@ -122,9 +123,8 @@ pub fn summarize(
         Err(e) => return Err(e.into()),
     };
 
-    let mut accounts: std::collections::BTreeMap<String, AccountSummary> =
-        std::collections::BTreeMap::new();
-    let mut latest: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+    let mut accounts: BTreeMap<String, AccountSummary> = BTreeMap::new();
+    let mut latest: BTreeMap<String, i64> = BTreeMap::new();
 
     for line in BufReader::new(file).lines() {
         let line = line?;

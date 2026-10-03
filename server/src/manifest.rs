@@ -1,7 +1,9 @@
 //! Data manifest generation and loading.
 //!
-//! The manifest is written to `$STATE_DIR/manifest.json`, never inside the
-//! share, and served virtually at `/_lanpull/manifest.json`.
+//! A full manifest per share is written to `$STATE_DIR/manifest/<share>.json`,
+//! never inside a share, and served at
+//! `/_lanpull/share/<share>/manifest.json`; the per-account filtered manifests
+//! are written under `$STATE_DIR/manifest/access/`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -58,13 +60,6 @@ pub struct Warnings {
     pub reserved: Vec<String>,
     /// Files whose modification time changed while they were hashed.
     pub modified_during_walk: Vec<String>,
-}
-
-impl Warnings {
-    /// Return `true` when there is nothing to report.
-    pub const fn is_empty(&self) -> bool {
-        self.symlinks.is_empty() && self.reserved.is_empty() && self.modified_during_walk.is_empty()
-    }
 }
 
 impl Manifest {

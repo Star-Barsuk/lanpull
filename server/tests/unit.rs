@@ -17,7 +17,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use lanpull::access::{Access, Rule};
-use lanpull::{arm::ArmState, audit, bundle, clients, config, manifest, timeutil};
+use lanpull::{arm::ArmState, audit, bundle, clients, config, manifest, status, timeutil};
 
 #[test]
 fn ignore_patterns_match() {
@@ -75,7 +75,7 @@ fn password_hash_roundtrip() {
     let password = clients::generate_password();
     assert_eq!(password.len(), 24);
     let hash = clients::hash_password(&password).unwrap();
-    assert!(hash.starts_with("$argon2"));
+    assert!(hash.starts_with("$argon2id$v=19$m=19456,t=2,p=1$"));
     assert!(clients::verify_password(&hash, &password));
     assert!(!clients::verify_password(&hash, "wrong"));
 }
@@ -104,7 +104,7 @@ fn clients_roundtrip_with_optional_ip() {
     assert_eq!(mode, 0o600);
 
     let loaded = clients::Clients::load(&path).unwrap();
-    assert_eq!(loaded.len(), 2);
+    assert_eq!(loaded.iter().count(), 2);
     assert_eq!(
         loaded.get("alpha").unwrap().allowed_ip.unwrap().to_string(),
         "10.0.0.5"
@@ -121,7 +121,7 @@ fn clients_parse_ignores_malformed_lines() {
     let path = dir.path().join("clients");
     fs::write(&path, text).unwrap();
     let loaded = clients::Clients::load(&path).unwrap();
-    assert_eq!(loaded.len(), 2);
+    assert_eq!(loaded.iter().count(), 2);
 }
 
 #[test]
@@ -169,8 +169,7 @@ fn arm_window_expires() {
     state.arm("alpha", 1000);
     assert!(state.is_armed("alpha", 999));
     assert!(!state.is_armed("alpha", 1000));
-    assert_eq!(state.remaining("alpha", 940), Some(60));
-    state.prune(1000);
+    assert_eq!(state.armed_entries(940), vec![("alpha".to_string(), 60)]);
     assert!(state.armed_entries(1000).is_empty());
 }
 
@@ -242,6 +241,49 @@ fn bundle_builds_and_finds_files() {
 }
 
 #[test]
+fn example_config_declares_a_named_share() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/lanpull.conf.example");
+    let text = fs::read_to_string(&path).unwrap();
+    let map = config::parse_kv(&text);
+    assert!(
+        map.keys().any(|key| key.starts_with("SHARE_")),
+        "the example must declare at least one SHARE_<name>"
+    );
+    assert!(
+        !map.contains_key("SHARE_DIR"),
+        "the removed SHARE_DIR key must not appear"
+    );
+}
+
+#[test]
+fn access_warnings_report_unknown_share() {
+    let dir = tempfile::tempdir().unwrap();
+    let share = dir.path().join("share");
+    fs::create_dir_all(&share).unwrap();
+    let conf = dir.path().join("lanpull.conf");
+    fs::write(
+        &conf,
+        format!(
+            "SHARE_reports={}\nSTATE_DIR={}\nSERVER_IP=127.0.0.1\n",
+            share.display(),
+            dir.path().join("state").display()
+        ),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("lanpull.access.json"),
+        br#"{"version":1,"shares":{"ghost":{"public":["**"]}}}"#,
+    )
+    .unwrap();
+    let config = config::Config::load(&conf).unwrap();
+    let warnings = status::access_warnings(&config);
+    assert!(
+        warnings.iter().any(|w| w.contains("unknown share ghost")),
+        "expected a warning about the unknown share, got {warnings:?}"
+    );
+}
+
+#[test]
 fn bundle_missing_version_is_unavailable() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("pull.py"), b"x").unwrap();
@@ -277,7 +319,7 @@ fn audit_report_aggregates() {
             ip: "10.0.0.5".to_string(),
             host: "client-a".to_string(),
             method: "GET".to_string(),
-            path: "/_lanpull/file/a.txt".to_string(),
+            path: "/_lanpull/share/reports/file/a.txt".to_string(),
             status: 401,
             bytes: 0,
             reason: Some("not_armed".to_string()),

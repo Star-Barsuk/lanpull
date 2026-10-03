@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import http.client
+import ssl
 from pathlib import Path
 from typing import cast
 
@@ -122,7 +124,7 @@ def test_is_ignored_and_protected() -> None:
     assert pull.is_ignored("dir/a.part")
     assert not pull.is_ignored("a.txt")
     assert pull.is_protected(".lanpull.lock")
-    assert pull.is_protected(".manifest.tmp")
+    assert pull.is_protected(".lanpull.partials.json")
     assert not pull.is_protected("a.txt")
 
 
@@ -253,3 +255,92 @@ def test_fetch_entry_keeps_partial_for_resume(tmp_path: Path) -> None:
     assert (tmp_path / "a.bin").read_bytes() == body
     assert not part.exists()
     assert partials == {}
+
+
+class _DeniedClient(pull.HttpClient):
+    """HttpClient whose connect() always returns a scripted 403 response."""
+
+    def connect(self) -> http.client.HTTPSConnection:
+        """Return a connection answering every request with 403."""
+        return cast("http.client.HTTPSConnection", _FakeConnection(_FakeResponse(403, [], {})))
+
+
+def test_get_json_access_denied() -> None:
+    client = _DeniedClient(
+        "example.invalid", 443, ssl.create_default_context(), "user:password", "host"
+    )
+    with pytest.raises(pull.FatalError, match="access denied"):
+        client.get_json("/_lanpull/share/reports/manifest.json", "unavailable")
+
+
+def test_download_access_denied(tmp_path: Path) -> None:
+    entry = pull.Entry("a.bin", 10, 1.0, "x")
+    denied = cast("pull.HttpClient", _FakeClient([_FakeResponse(403, [], {})]))
+    with pytest.raises(pull.PerFileError, match="access denied"):
+        pull.download(denied, "reports", entry, tmp_path, {}, pull.Progress(1, 1))
+
+
+def test_delete_stale_drops_missing_and_tracked(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    delivered = {"a.txt", "b.txt"}
+    deleted = pull.delete_stale(tmp_path, ["a.txt", "b.txt"], delivered)
+    assert deleted == 1
+    assert not (tmp_path / "a.txt").exists()
+    assert delivered == set()
+
+
+def test_prompt_delete(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+    assert pull.prompt_delete(["a.txt"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+    assert not pull.prompt_delete(["a.txt"])
+
+
+class _BundleClient:
+    """Minimal client serving one bundle manifest and scripted file bodies."""
+
+    def __init__(self, manifest: dict[str, object], bodies: list[bytes]) -> None:
+        self._manifest = manifest
+        self._bodies = list(bodies)
+
+    def get_json(self, path: str, unavailable: str) -> dict[str, object]:
+        """Return the scripted bundle manifest."""
+        return self._manifest
+
+    def connect(self) -> _FakeConnection:
+        """Return a connection with the next scripted body."""
+        return _FakeConnection(_FakeResponse(200, [self._bodies.pop(0)], {}))
+
+    def headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
+        """Return no extra headers."""
+        return dict(extra or {})
+
+    @property
+    def credentials(self) -> str:
+        """Return fixed credentials."""
+        return "user:password"
+
+
+def test_run_self_update_same_version_is_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pull, "__version__", "2.0.1")
+    manifest: dict[str, object] = {"version": "2.0.1", "files": []}
+    client = cast("pull.HttpClient", _BundleClient(manifest, []))
+    assert pull.run_self_update(tmp_path, client) == 0
+    assert not (tmp_path / "pull.py").exists()
+
+
+def test_run_self_update_downloads_new_script(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pull, "__version__", "1.0.0")
+    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+    body = b"new script\n"
+    manifest: dict[str, object] = {
+        "version": "2.0.0",
+        "files": [{"path": "pull.py", "sha256": hashlib.sha256(body).hexdigest()}],
+    }
+    client = cast("pull.HttpClient", _BundleClient(manifest, [body]))
+    assert pull.run_self_update(tmp_path, client) == 0
+    assert (tmp_path / "pull.py").read_bytes() == body

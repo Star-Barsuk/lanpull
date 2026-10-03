@@ -18,10 +18,12 @@ pub mod error;
 pub mod hash;
 pub mod http;
 pub mod ignore;
+pub mod live;
 pub mod manifest;
 pub mod policy;
 pub mod relpath;
 pub mod status;
+pub mod throttle;
 pub mod timeutil;
 
 pub use error::{Error, Result};

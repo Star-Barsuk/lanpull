@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 use std::net::IpAddr;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::error::{Error, Result};
 
@@ -75,7 +75,44 @@ impl Config {
             .map_err(|e| Error::Config(format!("cannot read {}: {e}", path.display())))?;
         let map = parse_kv(&text);
         let base = path.parent().unwrap_or_else(|| Path::new("."));
-        Ok(Self::from_map(&map)?.resolve(base))
+        let config = Self::from_map(&map)?.resolve(base);
+        config.validate_isolation()?;
+        Ok(config)
+    }
+
+    /// Reject internal state that would be published as share content.
+    ///
+    /// Nothing lanpull generates (manifests, TLS key, policy, accounts, audit
+    /// log) may live under a share root: the manifest walk would otherwise
+    /// include it and serve it to clients. Paths are compared lexically after
+    /// normalization, so the check does not require the files to exist.
+    fn validate_isolation(&self) -> Result<()> {
+        let shares: Vec<(&str, PathBuf)> = self
+            .shares
+            .iter()
+            .map(|(name, root)| (name.as_str(), normalize_path(root)))
+            .collect();
+        let guarded = [
+            ("STATE_DIR", &self.state_dir),
+            ("CERT_PATH", &self.cert_path),
+            ("KEY_PATH", &self.key_path),
+            ("CLIENTS_PATH", &self.clients_path),
+            ("ACCESS_PATH", &self.access_path),
+            ("AUDIT_LOG", &self.audit_log),
+        ];
+        for (label, path) in guarded {
+            let sensitive = normalize_path(path);
+            for (name, root) in &shares {
+                if sensitive.starts_with(root) {
+                    return Err(Error::Config(format!(
+                        "{label} {} is inside share '{name}' ({}); keep internal state outside every share root",
+                        path.display(),
+                        root.display()
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Resolve every relative path against `base`.
@@ -300,6 +337,26 @@ fn resolve_one(base: &Path, path: PathBuf) -> PathBuf {
     }
 }
 
+/// Absolutely resolve `.`/`..` components without touching the filesystem.
+///
+/// Used only for the containment check, so a symlinked intermediate directory
+/// is compared on its lexical path (a false negative there is not a safety
+/// issue: the share walk itself follows no symlinks).
+fn normalize_path(path: &Path) -> PathBuf {
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
 fn required_ip(map: &BTreeMap<String, String>, key: &str) -> Result<IpAddr> {
     map.get(key).map_or_else(
         || Err(Error::Config(format!("{key} is required"))),
@@ -361,6 +418,39 @@ mod tests {
     fn rejects_bad_share_name() {
         let m = map("SHARE_Bad=/srv/x\nSERVER_IP=127.0.0.1\n");
         assert!(Config::from_map(&m).is_err());
+    }
+
+    #[test]
+    fn rejects_state_dir_inside_a_share() {
+        let dir = tempfile::tempdir().unwrap();
+        let share = dir.path().join("share");
+        let conf = dir.path().join("lanpull.conf");
+        std::fs::write(
+            &conf,
+            format!(
+                "SHARE_reports={}\nSTATE_DIR={}\nSERVER_IP=127.0.0.1\n",
+                share.display(),
+                share.join("state").display()
+            ),
+        )
+        .unwrap();
+        assert!(Config::load(&conf).is_err());
+    }
+
+    #[test]
+    fn accepts_state_dir_outside_every_share() {
+        let dir = tempfile::tempdir().unwrap();
+        let conf = dir.path().join("lanpull.conf");
+        std::fs::write(
+            &conf,
+            format!(
+                "SHARE_reports={}\nSTATE_DIR={}\nSERVER_IP=127.0.0.1\n",
+                dir.path().join("share").display(),
+                dir.path().join("state").display()
+            ),
+        )
+        .unwrap();
+        assert!(Config::load(&conf).is_ok());
     }
 
     #[test]

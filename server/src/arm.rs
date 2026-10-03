@@ -52,25 +52,15 @@ impl ArmState {
         self.armed.get(name).is_some_and(|expiry| *expiry > now)
     }
 
-    /// Remaining seconds for `name` at `now`, if any.
-    pub fn remaining(&self, name: &str, now: i64) -> Option<i64> {
-        self.armed
-            .get(name)
-            .filter(|expiry| **expiry > now)
-            .map(|expiry| expiry.saturating_sub(now))
-    }
-
     /// List armed accounts with their remaining seconds at `now`.
+    ///
+    /// Expired entries are filtered out on read, so their presence in the file
+    /// is harmless and no separate pruning step is needed.
     pub fn armed_entries(&self, now: i64) -> Vec<(String, i64)> {
         self.armed
             .iter()
             .filter(|(_, expiry)| **expiry > now)
             .map(|(name, expiry)| (name.clone(), expiry.saturating_sub(now)))
             .collect()
-    }
-
-    /// Remove expired entries at `now`.
-    pub fn prune(&mut self, now: i64) {
-        self.armed.retain(|_, expiry| *expiry > now);
     }
 }

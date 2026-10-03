@@ -6,7 +6,8 @@
 //! authenticates, and enforces the reserved-prefix policy.
 
 use std::net::{IpAddr, SocketAddr};
-use std::path::PathBuf;
+use std::os::unix::io::AsRawFd as _;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,13 +26,14 @@ use tower_http::services::ServeFile;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::timeout::TimeoutLayer;
 
-use crate::arm::ArmState;
 use crate::audit::{self, Record};
-use crate::clients::{Account, Clients, Verify};
+use crate::clients::{self, Account, Clients, Verify};
 use crate::config::Config;
 use crate::error::{Error, Result};
+use crate::live::LiveCache;
+use crate::throttle::Throttle;
 use crate::timeutil;
-use crate::{bundle, policy, relpath, status};
+use crate::{bundle, relpath, status};
 
 /// Maximum accepted request body size in bytes.
 const MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -46,13 +48,32 @@ const HOST_HEADER: &str = "x-lanpull-host";
 
 /// Shared server state.
 ///
-/// Accounts and arm state are read from disk on every request so that
-/// `remove-client`, `passwd`, `arm`, and `disarm` take effect immediately
-/// without restarting the server (`docs/SPEC.md` sections 8 and 13).
+/// Accounts, the access policy, and arm state are re-read (through [`LiveCache`])
+/// on every request so that `remove-client`, `passwd`, `arm`, `disarm`, and
+/// policy edits take effect immediately without restarting the server
+/// (`docs/SPEC.md` sections 8 and 13).
 #[derive(Debug, Clone)]
 pub struct AppState {
     /// Server configuration.
     pub config: Arc<Config>,
+    /// Cache of accounts, policy, and arm state, invalidated on file change.
+    live: Arc<LiveCache>,
+    /// Failed-authentication throttle, keyed by source address.
+    throttle: Arc<Throttle>,
+    /// Hash used to equalize the work of an unknown-user check.
+    dummy_hash: String,
+}
+
+impl AppState {
+    /// Build state around a configuration.
+    pub fn new(config: Config) -> Self {
+        Self {
+            config: Arc::new(config),
+            live: Arc::new(LiveCache::new()),
+            throttle: Arc::new(Throttle::new()),
+            dummy_hash: clients::hash_password(&clients::generate_password()).unwrap_or_default(),
+        }
+    }
 }
 
 /// The authenticated account name attached to a request by the `access` layer.
@@ -108,8 +129,27 @@ async fn access(
     let host = sanitize_host(request.headers());
     let ip = peer.ip();
 
+    if !state.throttle.allow(ip) {
+        write_audit(
+            &state,
+            &Record {
+                ts: timeutil::iso8601(timeutil::now_unix()),
+                user: String::new(),
+                ip: ip.to_string(),
+                host,
+                method: method.to_string(),
+                path,
+                status: 401,
+                bytes: 0,
+                reason: Some("rate_limited".to_string()),
+            },
+        );
+        return unauthorized("rate_limited");
+    }
+
     match authenticate(&state, request.headers(), ip) {
         Ok(account) => {
+            state.throttle.record_success(ip);
             let user = account.name;
             request.extensions_mut().insert(User(user.clone()));
             let response = next.run(request).await;
@@ -134,6 +174,9 @@ async fn access(
             response
         }
         Err(failure) => {
+            if matches!(failure.reason.as_str(), "unknown_user" | "bad_password") {
+                state.throttle.record_failure(ip);
+            }
             let response = unauthorized(&failure.reason);
             write_audit(
                 &state,
@@ -167,7 +210,7 @@ fn authenticate(
         });
     };
 
-    let clients = match Clients::load(&state.config.clients_path) {
+    let clients = match state.live.clients(&state.config.clients_path) {
         Ok(clients) => clients,
         Err(e) => {
             tracing::warn!("cannot read account file: {e}");
@@ -180,6 +223,9 @@ fn authenticate(
 
     let (account, password_ok) = match clients.verify(&user, &password) {
         Verify::Unknown => {
+            // Verify against a dummy hash so an unknown user costs the same as
+            // a wrong password and cannot be distinguished by timing.
+            let _ = clients::verify_password(&state.dummy_hash, &password);
             return Err(Failure {
                 user,
                 reason: "unknown_user".to_string(),
@@ -205,7 +251,7 @@ fn authenticate(
     }
 
     if !account.local {
-        let armed = match ArmState::load(&state.config.arm_path()) {
+        let armed = match state.live.arm(&state.config.arm_path()) {
             Ok(arm) => arm.is_armed(&account.name, timeutil::now_unix()),
             Err(e) => {
                 tracing::warn!("cannot read arm state: {e}");
@@ -241,7 +287,7 @@ async fn serve_share_manifest(
     if !state.config.shares.contains_key(&share) {
         return not_found().await;
     }
-    match policy::load_access(&state.config) {
+    match state.live.access(&state.config) {
         Ok(access) if access.allows_share(&user.0, &share) => {}
         Ok(_) => return forbidden(),
         Err(e) => {
@@ -273,7 +319,7 @@ async fn serve_share_file(
     if relpath::validate(&path).is_err() {
         return not_found().await;
     }
-    match policy::load_access(&state.config) {
+    match state.live.access(&state.config) {
         Ok(access) if access.allows(&user.0, &share, &path) => {}
         Ok(_) => return forbidden(),
         Err(e) => {
@@ -281,15 +327,41 @@ async fn serve_share_file(
             return forbidden();
         }
     }
-    let Ok(full) = relpath::join(root, &path) else {
+    // `path` passed `relpath::validate` above, so the join cannot escape `root`.
+    let full = root.join(&path);
+    // Open the final component without following a symlink, so it cannot be
+    // swapped between a check and the open (TOCTOU). Intermediate components
+    // are covered by the canonical containment check below.
+    let Ok(file) = open_nofollow(&full) else {
         return not_found().await;
     };
-    match tokio::fs::symlink_metadata(&full).await {
-        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
-            serve_file(full, method, headers).await
-        }
-        _ => not_found().await,
+    if !file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+        return not_found().await;
     }
+    let (Ok(real_root), Ok(real_file)) = (
+        tokio::fs::canonicalize(root).await,
+        tokio::fs::canonicalize(&full).await,
+    ) else {
+        return not_found().await;
+    };
+    if !real_file.starts_with(&real_root) {
+        return not_found().await;
+    }
+    // Serve the already-opened descriptor through `/proc` so `ServeFile` cannot
+    // re-open a different inode; the descriptor stays open for the transfer.
+    let proc_path = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
+    let response = serve_file(proc_path, method, headers).await;
+    drop(file);
+    response
+}
+
+/// Open `path` for reading without following a symlink as the final component.
+fn open_nofollow(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
 }
 
 /// Handler for `/_lanpull/client/manifest.json`.
@@ -456,9 +528,7 @@ pub async fn serve(config: Config) -> Result<()> {
         tracing::warn!("{warning}");
     }
 
-    let state = AppState {
-        config: Arc::new(config.clone()),
-    };
+    let state = AppState::new(config.clone());
 
     let tls =
         axum_server::tls_rustls::RustlsConfig::from_pem_file(&config.cert_path, &config.key_path)

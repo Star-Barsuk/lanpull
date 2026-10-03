@@ -59,6 +59,7 @@ run_root install -Dm755 "$binary" "$bin_dir/lanpull"
 tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
 sed -e "s|__LANPULL_USER__|$operator|g" \
+    -e "s|__LANPULL_GROUP__|$group|g" \
     -e "s|__LANPULL_CONF__|$conf|g" \
     -e "s|__LANPULL_STATE_DIR__|$state_dir|g" "$unit_src" >"$tmp"
 run_root install -Dm644 "$tmp" "$unit_dest"

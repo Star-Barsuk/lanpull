@@ -10,7 +10,7 @@ use std::net::IpAddr;
 use std::path::Path;
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use argon2::Argon2;
+use argon2::{Algorithm, Argon2, Params, Version};
 use rand::distr::{Alphanumeric, SampleString};
 use rand::RngCore;
 
@@ -20,6 +20,28 @@ use crate::error::{Error, Result};
 const PASSWORD_LEN: usize = 24;
 /// The length of a generated salt in bytes.
 const SALT_LEN: usize = 16;
+/// Argon2id memory cost in KiB (the crate default, pinned explicitly).
+const ARGON2_MEMORY_KIB: u32 = 19_456;
+/// Argon2id time cost (iterations).
+const ARGON2_ITERATIONS: u32 = 2;
+/// Argon2id parallelism.
+const ARGON2_PARALLELISM: u32 = 1;
+
+/// Build the pinned Argon2id instance used for hashing.
+///
+/// The parameters are fixed here rather than taken from `Argon2::default()` so
+/// a change in the dependency default cannot silently weaken or alter stored
+/// hashes. Verification reads the parameters embedded in the PHC string.
+fn argon2_id() -> Result<Argon2<'static>> {
+    let params = Params::new(
+        ARGON2_MEMORY_KIB,
+        ARGON2_ITERATIONS,
+        ARGON2_PARALLELISM,
+        None,
+    )
+    .map_err(|e| Error::Password(e.to_string()))?;
+    Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
+}
 
 /// One client account.
 #[derive(Debug, Clone)]
@@ -98,11 +120,6 @@ impl Clients {
     /// Return `true` when there are no accounts.
     pub fn is_empty(&self) -> bool {
         self.accounts.is_empty()
-    }
-
-    /// Number of accounts.
-    pub fn len(&self) -> usize {
-        self.accounts.len()
     }
 
     /// Look up an account by name.
@@ -193,17 +210,19 @@ pub fn hash_password(password: &str) -> Result<String> {
     let mut salt_bytes = [0_u8; SALT_LEN];
     rand::rng().fill_bytes(&mut salt_bytes);
     let salt = SaltString::encode_b64(&salt_bytes).map_err(|e| Error::Password(e.to_string()))?;
-    let hash = Argon2::default()
+    let hash = argon2_id()?
         .hash_password(password.as_bytes(), &salt)
         .map_err(|e| Error::Password(e.to_string()))?;
     Ok(hash.to_string())
 }
 
 /// Verify a password against a PHC-format argon2 hash.
+///
+/// The cost parameters come from the hash itself, so hashes written by an
+/// earlier parameter set still verify.
 pub fn verify_password(hash: &str, password: &str) -> bool {
-    PasswordHash::new(hash).is_ok_and(|parsed| {
-        Argon2::default()
-            .verify_password(password.as_bytes(), &parsed)
-            .is_ok()
-    })
+    let Ok(parsed) = PasswordHash::new(hash) else {
+        return false;
+    };
+    argon2_id().is_ok_and(|argon2| argon2.verify_password(password.as_bytes(), &parsed).is_ok())
 }

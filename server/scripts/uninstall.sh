@@ -53,7 +53,7 @@ if [ "$share" = "1" ]; then
         || die "uninstall: --shares-file is required with --share 1"
     while IFS= read -r share_dir || [ -n "$share_dir" ]; do
         [ -n "$share_dir" ] || continue
-        require_safe_path "$share_dir" SHARE_DIR
+        require_safe_path "$share_dir" "share directory"
         run_root rm -rf "$share_dir"
         echo "removed: $share_dir"
     done <"$shares_file"

@@ -21,5 +21,5 @@ find "$root" \
     -path "$root/server/target" -prune -o \
     -path "$root/client/.venv" -prune -o \
     -type f \( -name '.lanpull.lock' -o -name 'state.json' \
-        -o -name '*.part' -o -name '.manifest.tmp' \) \
+        -o -name '*.part' -o -name '.lanpull.partials.json' \) \
     -print -exec rm -f {} +

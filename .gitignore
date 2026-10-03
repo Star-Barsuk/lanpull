@@ -5,7 +5,6 @@
 AGENTS.md
 config/lanpull.conf
 config/lanpull.clients
-config/lanpull.access
 config/lanpull.access.json
 
 # --- Internal development documents (not distributed) ---------------------
@@ -39,7 +38,7 @@ htmlcov/
 *.tmp
 .lanpull.lock
 state.json
-.manifest.tmp
+.lanpull.partials.json
 
 # --- Editors and OS -------------------------------------------------------
 .idea/
