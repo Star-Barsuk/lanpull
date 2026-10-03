@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """lanpull pull client.
 
-Mirrors a lanpull server's shared folder into a local directory over pinned
-HTTPS, replacing changed files, resuming interrupted transfers, verifying
-sha256, and optionally deleting files that lanpull delivered earlier but that
-are gone from the server. Uses only the Python standard library.
+Mirrors one or more lanpull shares into local directories over pinned HTTPS,
+replacing changed files, resuming interrupted transfers, verifying sha256, and
+optionally deleting files that lanpull delivered earlier but that are gone from
+the server. Uses only the Python standard library.
 
 The client lives in one folder: this script, ``lanpull.conf`` (``SERVER_URL``
-and ``OUTPUT``), ``auth`` (``user:password``), ``server.crt`` (the pinned
-self-signed certificate), and ``state.json`` (paths this client delivered).
-``--self-update`` refreshes this script from the server bundle.
+and one ``MIRROR_<share>=<dir>`` per mirrored share), ``auth``
+(``user:password``), ``server.crt`` (the pinned self-signed certificate), and
+``state.json`` (delivered paths, keyed by share). ``--self-update`` refreshes
+this script from the server bundle.
 """
 
 from __future__ import annotations
@@ -30,13 +31,13 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote, urlsplit
 
-__version__ = "1.0.1"
+__version__ = "2.0.0"
 
 SCHEME = "whole-file-v1"
-FILE_PREFIX = "/_lanpull/file/"
-MANIFEST_PATH = "/_lanpull/manifest.json"
+SHARE_PREFIX = "/_lanpull/share/"
 BUNDLE_MANIFEST_PATH = "/_lanpull/client/manifest.json"
 BUNDLE_PREFIX = "/_lanpull/client/"
+MIRROR_KEY = "MIRROR_"
 
 CONF_NAME = "lanpull.conf"
 AUTH_NAME = "auth"
@@ -87,7 +88,7 @@ class Planned:
 class Options:
     """Parsed command-line options."""
 
-    output: Path | None
+    share: str | None
     check: bool
     dry_run: bool
     delete: bool
@@ -128,6 +129,28 @@ def parse_conf(text: str) -> dict[str, str]:
         key, _, value = line.partition("=")
         result[key.strip()] = value.strip().strip('"').strip("'")
     return result
+
+
+def load_mirrors(conf: dict[str, str]) -> dict[str, Path]:
+    """Return the share-to-directory mapping from the config."""
+    mirrors: dict[str, Path] = {}
+    for key, value in conf.items():
+        if not key.startswith(MIRROR_KEY):
+            continue
+        share = key[len(MIRROR_KEY) :]
+        if not share or not value:
+            raise FatalError(f"ERROR: invalid mirror mapping: {key}")
+        if not _valid_share(share):
+            raise FatalError(f"ERROR: invalid share name: {share}")
+        mirrors[share] = Path(value).expanduser()
+    return mirrors
+
+
+def _valid_share(name: str) -> bool:
+    """Return whether a share name matches the server's rule."""
+    if not name or not (name[0].islower() or name[0].isdigit()):
+        return False
+    return all(ch.islower() or ch.isdigit() or ch in "_-" for ch in name)
 
 
 def read_auth(path: Path) -> str:
@@ -352,32 +375,38 @@ def save_partials(path: Path, partials: dict[str, str]) -> None:
     path.write_text(json.dumps(partials, sort_keys=True), encoding="utf-8")
 
 
-def load_state(path: Path) -> set[str]:
-    """Load the set of paths this client has delivered."""
+def load_state(path: Path) -> dict[str, set[str]]:
+    """Load delivered paths keyed by share."""
     if not path.is_file():
-        return set()
+        return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return set()
+        return {}
     if not isinstance(data, dict):
-        return set()
-    files = data.get("files")
-    if not isinstance(files, list):
-        return set()
-    return {item for item in files if isinstance(item, str)}
+        return {}
+    result: dict[str, set[str]] = {}
+    for share, files in data.items():
+        if isinstance(share, str) and isinstance(files, list):
+            result[share] = {item for item in files if isinstance(item, str)}
+    return result
 
 
-def save_state(path: Path, files: set[str]) -> None:
-    """Persist the delivered paths."""
-    text = json.dumps({"files": sorted(files)}, indent=2) + "\n"
-    path.write_text(text, encoding="utf-8")
+def save_state(path: Path, shares: dict[str, set[str]]) -> None:
+    """Persist the delivered paths, keyed by share."""
+    payload = {share: sorted(files) for share, files in sorted(shares.items())}
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
-def remote_file_path(rel: str) -> str:
-    """Percent-encode a relative path for the file endpoint."""
+def manifest_path(share: str) -> str:
+    """Return the manifest endpoint for a share."""
+    return f"{SHARE_PREFIX}{quote(share, safe='')}/manifest.json"
+
+
+def remote_file_path(share: str, rel: str) -> str:
+    """Percent-encode a share file path for the file endpoint."""
     encoded = "/".join(quote(segment, safe="") for segment in rel.split("/"))
-    return f"{FILE_PREFIX}{encoded}"
+    return f"{SHARE_PREFIX}{quote(share, safe='')}/file/{encoded}"
 
 
 def plan(entries: list[Entry], output: Path, verify: bool) -> list[Planned]:
@@ -427,6 +456,7 @@ def check_space(output: Path, needed: int) -> None:
 
 def download(
     client: HttpClient,
+    share: str,
     entry: Entry,
     output: Path,
     partials: dict[str, str],
@@ -435,7 +465,7 @@ def download(
     """Download one file to ``<path>.part``, resuming safely when possible."""
     part = output / (entry.path + ".part")
     part.parent.mkdir(parents=True, exist_ok=True)
-    remote = remote_file_path(entry.path)
+    remote = remote_file_path(share, entry.path)
 
     attempts = 0
     while True:
@@ -501,6 +531,7 @@ def download(
 
 def fetch_entry(
     client: HttpClient,
+    share: str,
     entry: Entry,
     output: Path,
     partials: dict[str, str],
@@ -508,7 +539,7 @@ def fetch_entry(
 ) -> None:
     """Download, verify, and atomically replace one file."""
     part = output / (entry.path + ".part")
-    download(client, entry, output, partials, progress)
+    download(client, share, entry, output, partials, progress)
 
     staged = part.stat().st_size if part.is_file() else 0
     if staged != entry.size:
@@ -550,22 +581,57 @@ def prompt_delete(stale: list[str]) -> bool:
 
 
 def run_pull(cdir: Path, client: HttpClient, conf: dict[str, str], options: Options) -> int:
-    """Perform one pull, ``--check``, or ``--dry-run``."""
-    if options.output is not None:
-        output = options.output.expanduser()
-    elif "OUTPUT" in conf:
-        output = Path(conf["OUTPUT"]).expanduser()
-    else:
-        raise FatalError("ERROR: OUTPUT is not set; pass a directory or set OUTPUT")
+    """Mirror every configured share (or the one named on the command line)."""
+    mirrors = load_mirrors(conf)
+    if not mirrors:
+        raise FatalError("ERROR: no MIRROR_<share> entries in lanpull.conf")
 
+    if options.share is not None:
+        if options.share not in mirrors:
+            raise FatalError(f"ERROR: share not configured: {options.share}")
+        selected = {options.share: mirrors[options.share]}
+    else:
+        selected = mirrors
+
+    state_path = cdir / STATE_NAME
+    states = load_state(state_path)
+
+    exit_code = 0
+    for share, output in selected.items():
+        result = run_share(client, share, output, states.get(share, set()), options)
+        states[share] = result.delivered
+        if not (options.check or options.dry_run):
+            save_state(state_path, states)
+        if result.code != 0:
+            exit_code = result.code
+        if options.check and result.code == 1:
+            exit_code = 1
+    return exit_code
+
+
+@dataclasses.dataclass
+class _ShareResult:
+    """The outcome of pulling one share."""
+
+    code: int
+    delivered: set[str]
+
+
+def run_share(
+    client: HttpClient,
+    share: str,
+    output: Path,
+    delivered: set[str],
+    options: Options,
+) -> _ShareResult:
+    """Mirror one share into its output directory."""
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     partials_path = output / PARTIALS_NAME
-    state_path = cdir / STATE_NAME
 
     with Lock(output / LOCK_NAME):
         data = client.get_json(
-            MANIFEST_PATH,
+            manifest_path(share),
             "server has no manifest; ask the operator to run make rescan",
         )
         (output / MANIFEST_TMP).write_text(json.dumps(data), encoding="utf-8")
@@ -578,24 +644,23 @@ def run_pull(cdir: Path, client: HttpClient, conf: dict[str, str], options: Opti
         unsure = [item for item in planned if item.action == VERIFY]
         unchanged = [item for item in planned if item.action == OK]
 
-        delivered = load_state(state_path)
         manifest_paths = {entry.path for entry in entries}
         stale = sorted(path for path in delivered - manifest_paths if not is_protected(path))
 
         if options.check:
             updates = len(need) + len(unsure)
-            print(f"manifest generated_at: {generated_at!s}")
-            print(f"updates available: {updates}; unchanged: {len(unchanged)}")
-            return 1 if updates else 0
+            print(f"[{share}] generated_at: {generated_at!s}")
+            print(f"[{share}] updates available: {updates}; unchanged: {len(unchanged)}")
+            return _ShareResult(1 if updates else 0, delivered)
 
         if options.dry_run:
             for item in planned:
                 if item.action != OK:
-                    print(f"{item.action}: {item.entry.path}")
+                    print(f"[{share}] {item.action}: {item.entry.path}")
             for path in stale:
-                print(f"STALE: {path}")
-            print(f"planned: {len(need)} need, {len(unsure)} verify, {len(stale)} stale")
-            return 0
+                print(f"[{share}] STALE: {path}")
+            print(f"[{share}] planned: {len(need)} need, {len(unsure)} verify, {len(stale)} stale")
+            return _ShareResult(0, delivered)
 
         if need:
             check_space(output, sum(item.entry.size for item in need))
@@ -608,7 +673,7 @@ def run_pull(cdir: Path, client: HttpClient, conf: dict[str, str], options: Opti
         for index, item in enumerate(need, start=1):
             entry = item.entry
             try:
-                fetch_entry(client, entry, output, partials, Progress(index, total))
+                fetch_entry(client, share, entry, output, partials, Progress(index, total))
             except PerFileError as exc:
                 errors.append(entry.path)
                 print(str(exc), file=sys.stderr)
@@ -623,14 +688,13 @@ def run_pull(cdir: Path, client: HttpClient, conf: dict[str, str], options: Opti
         if stale and (options.delete or prompt_delete(stale)):
             deleted = delete_stale(output, stale, delivered)
 
-        save_state(state_path, delivered)
-        print(f"downloaded: {downloaded} files, {format_bytes(total_bytes)}")
-        print(f"unchanged:  {len(unchanged)} files")
-        print(f"deleted:    {deleted} files")
-        print(f"errors:     {len(errors)} files")
+        print(f"[{share}] downloaded: {downloaded} files, {format_bytes(total_bytes)}")
+        print(f"[{share}] unchanged:  {len(unchanged)} files")
+        print(f"[{share}] deleted:    {deleted} files")
+        print(f"[{share}] errors:     {len(errors)} files")
         for path in errors:
             print(f"  {path}", file=sys.stderr)
-        return 1 if errors else 0
+        return _ShareResult(1 if errors else 0, delivered)
 
 
 def download_bundle_file(client: HttpClient, name: str, part: Path) -> None:
@@ -714,7 +778,7 @@ def run_self_update(cdir: Path, client: HttpClient) -> int:
 def parse_args(argv: list[str]) -> Options:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(prog="pull.py", description="lanpull pull client")
-    parser.add_argument("output", nargs="?", help="mirror directory (overrides OUTPUT)")
+    parser.add_argument("share", nargs="?", help="mirror only this share (default: all)")
     parser.add_argument("--check", action="store_true", help="report updates; change nothing")
     parser.add_argument("--dry-run", action="store_true", help="show the plan; change nothing")
     parser.add_argument("--delete", action="store_true", help="delete stale files without asking")
@@ -722,9 +786,9 @@ def parse_args(argv: list[str]) -> Options:
     parser.add_argument("--version", action="version", version=__version__)
     parsed = parser.parse_args(argv)
 
-    output = Path(parsed.output) if isinstance(parsed.output, str) else None
+    share = parsed.share if isinstance(parsed.share, str) else None
     return Options(
-        output=output,
+        share=share,
         check=bool(parsed.check),
         dry_run=bool(parsed.dry_run),
         delete=bool(parsed.delete),

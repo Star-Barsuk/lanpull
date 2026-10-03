@@ -13,9 +13,19 @@ import pull
 
 
 def test_parse_conf() -> None:
-    conf = pull.parse_conf('# comment\nSERVER_URL=https://10.0.0.1:8000\nOUTPUT="/srv/mirror"\n')
+    conf = pull.parse_conf(
+        '# comment\nSERVER_URL=https://10.0.0.1:8000\nMIRROR_reports="/srv/reports"\n'
+    )
     assert conf["SERVER_URL"] == "https://10.0.0.1:8000"
-    assert conf["OUTPUT"] == "/srv/mirror"
+    assert conf["MIRROR_reports"] == "/srv/reports"
+
+
+def test_load_mirrors() -> None:
+    conf = pull.load_mirrors({"MIRROR_reports": "/srv/r", "MIRROR_media": "/srv/m"})
+    assert conf == {"reports": Path("/srv/r"), "media": Path("/srv/m")}
+    assert pull.load_mirrors({"SERVER_URL": "x"}) == {}
+    with pytest.raises(pull.FatalError):
+        pull.load_mirrors({"MIRROR_Bad": "/srv/x"})
 
 
 def test_parse_server_url() -> None:
@@ -82,10 +92,17 @@ def test_parse_manifest_rejects_unsafe_path() -> None:
 
 
 def test_remote_file_path_encoding() -> None:
-    assert pull.remote_file_path("slides/deck v2.pptx") == "/_lanpull/file/slides/deck%20v2.pptx"
-    assert pull.remote_file_path("a#b?c%d&e") == "/_lanpull/file/a%23b%3Fc%25d%26e"
-    expected = "/_lanpull/file/%D1%84%D0%B0%D0%B9%D0%BB.txt"
-    assert pull.remote_file_path("\u0444\u0430\u0439\u043b.txt") == expected
+    expected = "/_lanpull/share/reports/file/slides/deck%20v2.pptx"
+    assert pull.remote_file_path("reports", "slides/deck v2.pptx") == expected
+    assert pull.remote_file_path("reports", "a#b?c%d&e") == (
+        "/_lanpull/share/reports/file/a%23b%3Fc%25d%26e"
+    )
+    expected = "/_lanpull/share/reports/file/%D1%84%D0%B0%D0%B9%D0%BB.txt"
+    assert pull.remote_file_path("reports", "\u0444\u0430\u0439\u043b.txt") == expected
+
+
+def test_manifest_path_per_share() -> None:
+    assert pull.manifest_path("reports") == "/_lanpull/share/reports/manifest.json"
 
 
 def test_is_ignored_and_protected() -> None:
@@ -128,9 +145,9 @@ def test_plan_actions(tmp_path: Path) -> None:
 
 def test_state_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "state.json"
-    pull.save_state(path, {"b.txt", "a.txt"})
-    assert pull.load_state(path) == {"a.txt", "b.txt"}
-    assert pull.load_state(tmp_path / "missing.json") == set()
+    pull.save_state(path, {"reports": {"b.txt", "a.txt"}, "media": {"x.mp3"}})
+    assert pull.load_state(path) == {"reports": {"a.txt", "b.txt"}, "media": {"x.mp3"}}
+    assert pull.load_state(tmp_path / "missing.json") == {}
 
 
 def test_partials_roundtrip(tmp_path: Path) -> None:
@@ -211,7 +228,7 @@ def test_fetch_entry_keeps_partial_for_resume(tmp_path: Path) -> None:
     short = _FakeResponse(200, [body[:4]], {"ETag": '"v1"'})
     short_client = cast("pull.HttpClient", _FakeClient([short]))
     with pytest.raises(pull.PerFileError):
-        pull.fetch_entry(short_client, entry, tmp_path, partials, progress)
+        pull.fetch_entry(short_client, "reports", entry, tmp_path, partials, progress)
 
     part = tmp_path / "a.bin.part"
     assert part.read_bytes() == body[:4]
@@ -219,7 +236,7 @@ def test_fetch_entry_keeps_partial_for_resume(tmp_path: Path) -> None:
 
     rest = _FakeResponse(206, [body[4:]], {"ETag": '"v1"'})
     rest_client = cast("pull.HttpClient", _FakeClient([rest]))
-    pull.fetch_entry(rest_client, entry, tmp_path, partials, progress)
+    pull.fetch_entry(rest_client, "reports", entry, tmp_path, partials, progress)
 
     assert (tmp_path / "a.bin").read_bytes() == body
     assert not part.exists()
