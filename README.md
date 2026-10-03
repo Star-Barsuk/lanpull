@@ -270,6 +270,11 @@ The optional third field binds the account to a source IP; omit it (or use
 account, exempt from the arming window. Managed with `make add-client`,
 `make remove-client`, and `make passwd`; never committed.
 
+Pick `<client-name>` as a meaningful label for the machine or transfer
+direction (for example `pc-to-laptop`); it is the account identity and the key
+of the access policy. The client hostname (`X-Lanpull-Host`) is self-reported,
+shown by `lanpull report`, and never grants access.
+
 ### Access policy — `config/lanpull.access.json`
 
 One JSON object; never committed and mode 600:
