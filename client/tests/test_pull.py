@@ -35,6 +35,18 @@ def test_parse_server_url() -> None:
         pull.parse_server_url("http://10.0.0.1")
 
 
+def test_load_ssl_context_missing_is_fatal(tmp_path: Path) -> None:
+    with pytest.raises(pull.FatalError):
+        pull.load_ssl_context(tmp_path / "server.crt")
+
+
+def test_load_ssl_context_unreadable_cert_is_fatal(tmp_path: Path) -> None:
+    cert = tmp_path / "server.crt"
+    cert.write_text("not a certificate", encoding="utf-8")
+    with pytest.raises(pull.FatalError):
+        pull.load_ssl_context(cert)
+
+
 def test_read_auth_strips_newlines(tmp_path: Path) -> None:
     auth = tmp_path / "auth"
     auth.write_text("alpha:secret\r\n", encoding="utf-8")

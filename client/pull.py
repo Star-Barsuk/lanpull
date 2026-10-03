@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote, urlsplit
 
-__version__ = "2.0.0"
+__version__ = "2.0.1"
 
 SCHEME = "whole-file-v1"
 SHARE_PREFIX = "/_lanpull/share/"
@@ -169,7 +169,10 @@ def load_ssl_context(cert: Path) -> ssl.SSLContext:
     """Build a TLS context pinned to the given certificate."""
     if not cert.is_file():
         raise FatalError(f"ERROR: no pinned certificate at {cert}")
-    return ssl.create_default_context(cafile=str(cert))
+    try:
+        return ssl.create_default_context(cafile=str(cert))
+    except ssl.SSLError as exc:
+        raise FatalError(f"ERROR: cannot read the pinned certificate at {cert}: {exc}") from exc
 
 
 def parse_server_url(url: str) -> tuple[str, int]:
