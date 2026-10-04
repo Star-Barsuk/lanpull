@@ -105,4 +105,10 @@ rm -f "$share/a.txt"
 # Self-update at the same version is a no-op.
 "$client/pull.py" --self-update >/dev/null || die "e2e: self-update failed"
 
+# Offline cleanup removes the runtime residue but keeps delivered files.
+"$client/pull.py" --clean --yes >/dev/null || die "e2e: --clean failed"
+[ ! -e "$client/state.json" ] || die "e2e: --clean left state.json"
+[ ! -e "$tmp/mirror/default/.lanpull.lock" ] || die "e2e: --clean left the lock"
+[ -f "$tmp/mirror/default/c.txt" ] || die "e2e: --clean removed a delivered file"
+
 echo "e2e: PASS"

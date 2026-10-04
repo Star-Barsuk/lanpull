@@ -228,6 +228,7 @@ Copy the staged folder to the machine once, then drive it from the terminal:
 ./pull.py                # download/resume changed files, then handle stale files
 ./pull.py --dry-run      # show the plan; change nothing
 ./pull.py --self-update  # refresh pull.py from the server (asks to confirm)
+./pull.py --clean        # remove this client's runtime leftovers (works offline)
 ```
 
 ## Teardown
@@ -256,7 +257,8 @@ nothing you need.
 Together these targets erase every artifact lanpull itself created on the
 server, at any stage after the service has been stopped. The gate tools that
 `make setup` installs, the systemd journal, and client folders on remote
-machines are not lanpull artifacts, so they are left in place.
+machines are not lanpull artifacts, so they are left in place; on each client,
+`./pull.py --clean` removes that client's own runtime leftovers.
 
 ## Client usage
 
@@ -267,6 +269,7 @@ machines are not lanpull artifacts, so they are left in place.
 | `pull.py --dry-run` | Print `NEED`/`VERIFY`/`STALE` actions; change nothing. | `0` |
 | `pull.py --delete` | Like a normal pull, but delete tracked stale files without prompting. | as `pull.py` |
 | `pull.py --self-update` | Compare versions and replace `pull.py` from the served bundle. | `0` current/declined/updated, `2` fatal |
+| `pull.py --clean` | Remove this client's runtime leftovers: `state.json`, per-mirror `.lanpull.lock`/`.lanpull.partials.json`, and every `*.part`. Never contacts the server; delivered files and the client folder are left untouched. | `0` removed/declined, `1` per-file errors, `2` fatal |
 | `pull.py --version` | Print the client version. | `0` |
 
 A positional argument limits the run to one configured share:
@@ -275,10 +278,12 @@ A positional argument limits the run to one configured share:
 ./pull.py reports
 ```
 
-`--check`, `--dry-run`, `--delete`, and `--self-update` may be combined with a
-share where it makes sense. Deletion is limited to files lanpull itself
-delivered earlier, recorded in `state.json`; files you created in the mirror
-folder are never touched.
+`--check`, `--dry-run`, `--delete`, `--self-update`, and `--clean` may be
+combined with a share where it makes sense. Deletion is limited to files lanpull
+itself delivered earlier, recorded in `state.json`; files you created in the
+mirror folder are never touched. `--clean` removes only runtime leftovers and
+stays inside that boundary: it uses `--dry-run` to preview and `--yes` to skip
+its single confirmation prompt.
 
 ## Configuration
 

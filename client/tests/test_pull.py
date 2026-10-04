@@ -344,3 +344,119 @@ def test_run_self_update_downloads_new_script(
     client = cast("pull.HttpClient", _BundleClient(manifest, [body]))
     assert pull.run_self_update(tmp_path, client) == 0
     assert (tmp_path / "pull.py").read_bytes() == body
+
+
+def _clean_options(**overrides: object) -> pull.Options:
+    """Build a ``--clean`` Options with the given overrides."""
+    values: dict[str, object] = {
+        "share": None,
+        "check": False,
+        "dry_run": False,
+        "delete": False,
+        "self_update": False,
+        "clean": True,
+        "yes": False,
+    }
+    values.update(overrides)
+    return pull.Options(**values)  # type: ignore[arg-type]
+
+
+def test_parse_args_clean_conflicts() -> None:
+    with pytest.raises(SystemExit):
+        pull.parse_args(["--clean", "--check"])
+    with pytest.raises(SystemExit):
+        pull.parse_args(["--yes"])
+    options = pull.parse_args(["--clean", "--yes", "--dry-run"])
+    assert options.clean and options.yes and options.dry_run
+
+
+def test_clean_targets_only_runtime_residue(tmp_path: Path) -> None:
+    cdir = tmp_path / "client"
+    mirror = tmp_path / "mirror"
+    (mirror / "sub").mkdir(parents=True)
+    cdir.mkdir()
+    (cdir / "state.json").write_text("{}", encoding="utf-8")
+    (cdir / "pull.py.part").write_text("staged", encoding="utf-8")
+    (mirror / ".lanpull.lock").write_text("", encoding="utf-8")
+    (mirror / ".lanpull.partials.json").write_text("{}", encoding="utf-8")
+    (mirror / "sub" / "b.txt.part").write_text("half", encoding="utf-8")
+    (mirror / "a.txt").write_text("delivered", encoding="utf-8")
+    (cdir / "auth").write_text("user:password", encoding="utf-8")
+    (cdir / "lanpull.conf").write_text("SERVER_URL=https://x\n", encoding="utf-8")
+
+    targets = pull.clean_targets(cdir, {"reports": mirror})
+    names = {path.name for path in targets}
+    assert names == {
+        "state.json",
+        "pull.py.part",
+        ".lanpull.lock",
+        ".lanpull.partials.json",
+        "b.txt.part",
+    }
+    assert mirror / "a.txt" not in targets
+    assert cdir / "auth" not in targets
+    assert cdir / "lanpull.conf" not in targets
+
+
+def test_run_clean_dry_run_removes_nothing(tmp_path: Path) -> None:
+    cdir = tmp_path / "client"
+    cdir.mkdir()
+    state = cdir / "state.json"
+    state.write_text("{}", encoding="utf-8")
+    assert pull.run_clean(cdir, {}, _clean_options(dry_run=True)) == 0
+    assert state.exists()
+
+
+def test_run_clean_prompts_and_honors_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cdir = tmp_path / "client"
+    cdir.mkdir()
+    state = cdir / "state.json"
+    state.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+    assert pull.run_clean(cdir, {}, _clean_options()) == 0
+    assert state.exists()
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+    assert pull.run_clean(cdir, {}, _clean_options()) == 0
+    assert not state.exists()
+
+
+def test_run_clean_yes_needs_no_prompt(tmp_path: Path) -> None:
+    cdir = tmp_path / "client"
+    cdir.mkdir()
+    state = cdir / "state.json"
+    state.write_text("{}", encoding="utf-8")
+    assert pull.run_clean(cdir, {}, _clean_options(yes=True)) == 0
+    assert not state.exists()
+
+
+def test_run_clean_nothing_to_remove(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    cdir = tmp_path / "client"
+    cdir.mkdir()
+    assert pull.run_clean(cdir, {}, _clean_options(yes=True)) == 0
+    assert "nothing to remove" in capsys.readouterr().out
+
+
+def test_run_clean_selected_share(tmp_path: Path) -> None:
+    cdir = tmp_path / "client"
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    for directory in (cdir, first, second):
+        directory.mkdir()
+        (directory / ".lanpull.lock").write_text("", encoding="utf-8")
+    conf = {"MIRROR_first": str(first), "MIRROR_second": str(second)}
+    assert pull.run_clean(cdir, conf, _clean_options(share="first", yes=True)) == 0
+    assert not (first / ".lanpull.lock").exists()
+    assert (second / ".lanpull.lock").exists()
+
+
+def test_run_clean_skips_unsafe_mirror(tmp_path: Path) -> None:
+    cdir = tmp_path / "client"
+    cdir.mkdir()
+    state = cdir / "state.json"
+    state.write_text("{}", encoding="utf-8")
+    assert pull.run_clean(cdir, {"MIRROR_root": "/"}, _clean_options(yes=True)) == 0
+    assert not state.exists()

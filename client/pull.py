@@ -10,7 +10,9 @@ The client lives in one folder: this script, ``lanpull.conf`` (``SERVER_URL``
 and one ``MIRROR_<share>=<dir>`` per mirrored share), ``auth``
 (``user:password``), ``server.crt`` (the pinned self-signed certificate), and
 ``state.json`` (delivered paths, keyed by share). ``--self-update`` refreshes
-this script from the server bundle.
+this script from the server bundle. ``--clean`` removes this client's runtime
+leftovers (``state.json``, per-mirror lock/validator files, and ``*.part``)
+without contacting the server.
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote, urlsplit
 
-__version__ = "2.0.1"
+__version__ = "2.1.0"
 
 SCHEME = "whole-file-v1"
 SHARE_PREFIX = "/_lanpull/share/"
@@ -92,6 +94,8 @@ class Options:
     dry_run: bool
     delete: bool
     self_update: bool
+    clean: bool
+    yes: bool
 
 
 @dataclasses.dataclass(frozen=True)
@@ -781,6 +785,154 @@ def run_self_update(cdir: Path, client: HttpClient) -> int:
     return 0
 
 
+def _is_regular_file(path: Path) -> bool:
+    """Return whether ``path`` is an existing regular file, not a symlink."""
+    try:
+        return path.is_file() and not path.is_symlink()
+    except OSError:
+        return False
+
+
+def _within(path: Path, root: Path) -> bool:
+    """Return whether ``path`` resolves to a location inside ``root``."""
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _discover_parts(root: Path) -> list[Path]:
+    """Return every regular ``*.part`` file under ``root`` without following symlinks."""
+    found: list[Path] = []
+    for dirpath, _dirnames, filenames in os.walk(root, followlinks=False):
+        for name in filenames:
+            if not name.endswith(".part"):
+                continue
+            candidate = Path(dirpath) / name
+            if _is_regular_file(candidate) and _within(candidate, root):
+                found.append(candidate)
+    return sorted(found)
+
+
+def clean_targets(cdir: Path, mirrors: dict[str, Path]) -> list[Path]:
+    """Return this client's runtime leftovers, and nothing else.
+
+    Included: ``state.json`` and any ``*.part`` in the client folder, and per
+    mirror the lock file, the resume validators, and every ``*.part``. Delivered
+    files, files the operator created, and directories are never included.
+    """
+    targets: list[Path] = []
+    state = cdir / STATE_NAME
+    if _is_regular_file(state):
+        targets.append(state)
+    targets.extend(path for path in sorted(cdir.glob("*.part")) if _is_regular_file(path))
+
+    for output in mirrors.values():
+        root = output.expanduser().resolve()
+        if not root.is_dir():
+            continue
+        for name in (LOCK_NAME, PARTIALS_NAME):
+            candidate = root / name
+            if _is_regular_file(candidate):
+                targets.append(candidate)
+        targets.extend(_discover_parts(root))
+
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for path in targets:
+        key = path.resolve()
+        if key not in seen:
+            seen.add(key)
+            unique.append(path)
+    return unique
+
+
+def _unsafe_mirror(path: Path) -> bool:
+    """Return whether a mirror path is too broad to scan."""
+    text = str(path).strip()
+    if not text or text == "/":
+        return True
+    try:
+        return path.expanduser().resolve() == Path("/")
+    except OSError:
+        return True
+
+
+def _mirror_busy(root: Path) -> bool:
+    """Return whether another pull holds the lock on this mirror."""
+    lock = root / LOCK_NAME
+    if not _is_regular_file(lock):
+        return False
+    try:
+        fd = os.open(lock, os.O_RDWR)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return True
+    finally:
+        os.close(fd)
+
+
+def run_clean(cdir: Path, conf: dict[str, str], options: Options) -> int:
+    """Remove this client's runtime leftovers without contacting the server."""
+    mirrors = load_mirrors(conf)
+    if options.share is not None:
+        if options.share not in mirrors:
+            raise FatalError(f"ERROR: share not configured: {options.share}")
+        mirrors = {options.share: mirrors[options.share]}
+
+    active: dict[str, Path] = {}
+    for share, output in mirrors.items():
+        if _unsafe_mirror(output):
+            print(
+                f"WARNING: {share}: refusing to scan unsafe mirror path: {output}",
+                file=sys.stderr,
+            )
+            continue
+        if _mirror_busy(output.expanduser().resolve()):
+            print(f"WARNING: {share}: another pull is running; skipped", file=sys.stderr)
+            continue
+        active[share] = output
+
+    targets = clean_targets(cdir, active)
+    if not targets:
+        print("[clean] nothing to remove")
+        return 0
+
+    if options.dry_run:
+        for path in targets:
+            print(f"[clean] would remove: {path}")
+        print(f"[clean] would remove: {len(targets)} files")
+        return 0
+
+    if not options.yes:
+        for path in targets:
+            print(f"REMOVE: {path}")
+        answer = input(f"Remove these {len(targets)} lanpull artifact(s)? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            print("[clean] nothing removed")
+            return 0
+
+    removed = 0
+    failures = 0
+    for path in targets:
+        try:
+            path.unlink()
+            removed += 1
+        except OSError as exc:
+            failures += 1
+            print(f"ERROR: cannot remove {path}: {exc}", file=sys.stderr)
+    print(f"[clean] removed: {removed} files")
+    if failures:
+        return 1
+    return 0
+
+
 def parse_args(argv: list[str]) -> Options:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(prog="pull.py", description="lanpull pull client")
@@ -789,16 +941,34 @@ def parse_args(argv: list[str]) -> Options:
     parser.add_argument("--dry-run", action="store_true", help="show the plan; change nothing")
     parser.add_argument("--delete", action="store_true", help="delete stale files without asking")
     parser.add_argument("--self-update", action="store_true", help="update pull.py from the server")
+    parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="remove this client's runtime leftovers (no server needed)",
+    )
+    parser.add_argument("--yes", action="store_true", help="do not ask before cleaning")
     parser.add_argument("--version", action="version", version=__version__)
     parsed = parser.parse_args(argv)
 
     share = parsed.share if isinstance(parsed.share, str) else None
+    check = bool(parsed.check)
+    dry_run = bool(parsed.dry_run)
+    delete = bool(parsed.delete)
+    self_update = bool(parsed.self_update)
+    clean = bool(parsed.clean)
+    yes = bool(parsed.yes)
+    if clean and (check or delete or self_update):
+        parser.error("--clean cannot be combined with --check, --delete, or --self-update")
+    if yes and not clean:
+        parser.error("--yes is only meaningful with --clean")
     return Options(
         share=share,
-        check=bool(parsed.check),
-        dry_run=bool(parsed.dry_run),
-        delete=bool(parsed.delete),
-        self_update=bool(parsed.self_update),
+        check=check,
+        dry_run=dry_run,
+        delete=delete,
+        self_update=self_update,
+        clean=clean,
+        yes=yes,
     )
 
 
@@ -809,6 +979,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         conf_path = directory / CONF_NAME
         conf = parse_conf(conf_path.read_text(encoding="utf-8")) if conf_path.is_file() else {}
+
+        # Cleaning is fully offline: it never reads the certificate or credentials.
+        if options.clean:
+            return run_clean(directory, conf, options)
+
         server_url = conf.get("SERVER_URL")
         if not server_url:
             raise FatalError("ERROR: SERVER_URL is not set in lanpull.conf")
