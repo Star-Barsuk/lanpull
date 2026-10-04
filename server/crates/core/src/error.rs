@@ -36,6 +36,12 @@ pub enum Error {
     /// The configuration file is missing, unreadable, or invalid.
     #[error("configuration error: {0}")]
     Config(String),
+    /// The command was used incorrectly (bad flag combination or missing input).
+    #[error("{0}")]
+    Usage(String),
+    /// The operator declined an interactive confirmation.
+    #[error("{0}")]
+    Cancelled(String),
     /// The server has not been initialized: a required file is absent.
     #[error("not initialized: {0}")]
     NotInitialized(String),
@@ -86,22 +92,37 @@ impl Error {
     /// The process exit code that corresponds to this error.
     pub const fn exit_code(&self) -> u8 {
         match self {
+            Self::Usage(_) => exit::USAGE,
             Self::NotInitialized(_) => exit::NOT_INITIALIZED,
             Self::Denied(_) => exit::DENIED,
             Self::Busy(_) => exit::BUSY,
-            _ => exit::FAILURE,
+            Self::Config(_)
+            | Self::Cancelled(_)
+            | Self::Io(_)
+            | Self::Json(_)
+            | Self::Duration(_)
+            | Self::UnsafePath(_)
+            | Self::Manifest(_)
+            | Self::Account(_)
+            | Self::Password(_)
+            | Self::Certificate(_)
+            | Self::Server(_)
+            | Self::BadPath { .. } => exit::FAILURE,
         }
     }
 
     /// An actionable hint to print after the error, when one helps.
     pub const fn hint(&self) -> Option<&'static str> {
         match self {
+            Self::Config(_) => Some("run 'lanpull config show' to inspect the configuration"),
+            Self::Usage(_) => Some("run 'lanpull --help' for usage"),
             Self::NotInitialized(_) => {
-                Some("run 'sudo lanpull init' to create the configuration and state")
+                Some("run 'lanpull init' to create the configuration and state")
             }
-            Self::Config(_) => Some("check the configuration; run 'sudo lanpull init' if absent"),
             Self::Certificate(_) => Some("run 'lanpull cert' to generate the certificate"),
-            Self::Denied(_) => Some("grant access with 'sudo lanpull access ...'"),
+            Self::Denied(_) => {
+                Some("inspect 'lanpull account list' and 'lanpull access client list'")
+            }
             _ => None,
         }
     }
@@ -117,6 +138,8 @@ mod tests {
     #[test]
     fn exit_codes_follow_the_contract() {
         assert_eq!(Error::Config("x".into()).exit_code(), exit::FAILURE);
+        assert_eq!(Error::Usage("x".into()).exit_code(), exit::USAGE);
+        assert_eq!(Error::Cancelled("x".into()).exit_code(), exit::FAILURE);
         assert_eq!(
             Error::NotInitialized("x".into()).exit_code(),
             exit::NOT_INITIALIZED
@@ -126,8 +149,10 @@ mod tests {
     }
 
     #[test]
-    fn not_initialized_has_a_hint() {
+    fn hints_are_present_for_actionable_errors() {
         assert!(Error::NotInitialized("x".into()).hint().is_some());
+        assert!(Error::Usage("x".into()).hint().is_some());
+        assert!(Error::Cancelled("x".into()).hint().is_none());
         assert!(Error::Io(io::Error::other("x")).hint().is_none());
     }
 }

@@ -46,7 +46,7 @@ pub fn create(
     let pull_source = config.bundle_dir().join("pull.py");
     if !pull_source.is_file() {
         return Err(Error::Config(
-            "client bundle not staged; run 'sudo lanpull init' or reinstall".to_string(),
+            "client bundle not staged; run 'make install' (or 'make client-bundle')".to_string(),
         ));
     }
 
@@ -54,7 +54,7 @@ pub fn create(
     if !policy.has_effective_rules(name) {
         return Err(Error::Account(format!(
             "account {name} has no access; grant it with \
-             'sudo lanpull access public add <share>:**' first"
+             'lanpull access public add <share>:**' first"
         )));
     }
     if !config.cert_path.is_file() {
@@ -124,14 +124,18 @@ pub fn export(
     let staging = config.state_dir.join("client-ready").join(name);
     if !staging.is_dir() {
         return Err(Error::Account(format!(
-            "no staged folder for {name}; run 'lanpull account passwd {name}' or recreate it"
+            "no staged folder for {name}; re-create the account with 'lanpull account add {name} --output <dir>'"
         )));
     }
     if !staging.join("auth").is_file() {
         return Err(Error::Account(format!(
-            "staged folder for {name} has no auth file; run 'lanpull account passwd {name}'"
+            "staged folder for {name} has no auth file; run 'lanpull account passwd {name} --output <dir>'"
         )));
     }
+
+    // Refresh the generated files from the current configuration so a rotated
+    // certificate, a rebuilt pull.py, or a changed policy is reflected.
+    refresh_staging(config, name)?;
 
     // A path that is an existing directory means "put the folder inside it".
     let target = if destination.is_dir() {
@@ -164,6 +168,92 @@ pub fn export(
         destination: target,
         cross_device,
     })
+}
+
+/// Rewrite the generated files in an existing staging folder from the current
+/// configuration, preserving `auth`.
+///
+/// Used before an export so a rotated certificate, a rebuilt `pull.py`, or a
+/// changed policy/share set is reflected in the delivered folder. The mirror
+/// base is recovered from the staged `MIRROR_<share>` lines.
+pub fn refresh_staging(config: &Config, name: &str) -> Result<PathBuf> {
+    let staging = config.state_dir.join("client-ready").join(name);
+    if !staging.is_dir() {
+        return Err(Error::Account(format!(
+            "no staged folder for {name}; re-create the account with 'lanpull account add {name} --output <dir>'"
+        )));
+    }
+    let output = mirror_base(&staging.join("lanpull.conf")).unwrap_or_else(|| PathBuf::from("."));
+
+    let pull_source = config.bundle_dir().join("pull.py");
+    if pull_source.is_file() {
+        std::fs::copy(&pull_source, staging.join("pull.py"))?;
+        set_executable(&staging.join("pull.py"))?;
+    }
+
+    let access = policy::load_access(config)?;
+    let conf = client_conf(config, name, &output, &access)?;
+    crate::atomic::write(&staging.join("lanpull.conf"), conf.as_bytes())?;
+
+    if config.cert_path.is_file() {
+        std::fs::copy(&config.cert_path, staging.join("server.crt"))?;
+    }
+    apply_modes(&staging)?;
+    Ok(staging)
+}
+
+/// Rebuild an account's staging folder from scratch, preserving the given auth
+/// line.
+///
+/// Used by `account passwd --output` when the staging folder was moved or
+/// removed: the account already exists, so only the client files are written.
+pub fn restage(config: &Config, name: &str, output: &Path, auth: &str) -> Result<PathBuf> {
+    let pull_source = config.bundle_dir().join("pull.py");
+    if !pull_source.is_file() {
+        return Err(Error::Config(
+            "client bundle not staged; run `make install` (or `make client-bundle`)".to_string(),
+        ));
+    }
+    let access = policy::load_access(config)?;
+    let staging = config.state_dir.join("client-ready").join(name);
+    std::fs::create_dir_all(&staging)?;
+
+    std::fs::copy(&pull_source, staging.join("pull.py"))?;
+    set_executable(&staging.join("pull.py"))?;
+    let conf = client_conf(config, name, output, &access)?;
+    crate::atomic::write(&staging.join("lanpull.conf"), conf.as_bytes())?;
+    crate::atomic::write_private(&staging.join("auth"), auth.as_bytes())?;
+    if config.cert_path.is_file() {
+        std::fs::copy(&config.cert_path, staging.join("server.crt"))?;
+    }
+    apply_modes(&staging)?;
+    Ok(staging)
+}
+
+/// Recover the mirror base directory from a staged client configuration.
+///
+/// The staged file lists `MIRROR_<share>=<base>/<share>`; the base is the
+/// parent of any entry. Returns `None` when the file has no `MIRROR_` line.
+fn mirror_base(staged_conf: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(staged_conf).ok()?;
+    for line in text.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if !key.starts_with("MIRROR_") {
+            continue;
+        }
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        let path = Path::new(value);
+        return Some(
+            path.parent()
+                .map_or_else(|| path.to_path_buf(), Path::to_path_buf),
+        );
+    }
+    None
 }
 
 /// Compare the device of two paths, walking up to the nearest existing parent.
@@ -280,7 +370,7 @@ pub fn client_conf(
     access: &Access,
 ) -> Result<String> {
     let mut text = format!(
-        "# Generated by lanpull add-client for {account}.\nSERVER_URL=https://{}:{}\n",
+        "# Generated by 'lanpull account add' for {account}.\nSERVER_URL=https://{}:{}\n",
         config.server_ip, config.port
     );
     for share in config.shares.keys() {

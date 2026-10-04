@@ -1,8 +1,9 @@
 //! Interactive confirmation for destructive commands.
 //!
 //! With `--yes` the action proceeds. Otherwise the operator must confirm on a
-//! controlling terminal; when there is no terminal the command is refused
-//! rather than silently proceeding.
+//! controlling terminal; when there is no terminal the command is a usage error
+//! rather than silently proceeding. Declining is reported as "cancelled" and is
+//! not a policy denial.
 
 use std::io::{BufRead as _, IsTerminal as _, Write as _};
 
@@ -14,7 +15,7 @@ pub fn require(yes: bool, action: &str) -> Result<()> {
         return Ok(());
     }
     if !std::io::stdin().is_terminal() {
-        return Err(Error::Denied(format!(
+        return Err(Error::Usage(format!(
             "refusing to {action} without a terminal; pass --yes in scripts"
         )));
     }
@@ -25,6 +26,6 @@ pub fn require(yes: bool, action: &str) -> Result<()> {
     if matches!(line.trim(), "y" | "Y" | "yes" | "YES") {
         Ok(())
     } else {
-        Err(Error::Denied(format!("{action} cancelled")))
+        Err(Error::Cancelled(format!("{action} cancelled")))
     }
 }

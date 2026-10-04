@@ -7,14 +7,15 @@ use lanpull_core::config::Config;
 use lanpull_core::error::{Error, Result};
 use serde::Serialize;
 
-use crate::cli::{print_json, JsonFlag};
+use crate::cli::output::format_rows;
+use crate::cli::Outcome;
 use crate::manifest_helpers::report_regeneration;
 
 /// Share operations.
 #[derive(Debug, Subcommand)]
 pub enum ShareCommand {
     /// List the declared shares and their directories.
-    List(JsonFlag),
+    List,
     /// Regenerate the per-share and per-account manifests.
     Rescan,
     /// Add a share directory to the configuration.
@@ -23,6 +24,9 @@ pub enum ShareCommand {
         name: String,
         /// Directory to distribute.
         dir: PathBuf,
+        /// Show what would change without writing the configuration.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Remove a share from the configuration.
     Remove {
@@ -31,7 +35,22 @@ pub enum ShareCommand {
         /// Do not ask for confirmation.
         #[arg(long)]
         yes: bool,
+        /// Show what would change without writing the configuration.
+        #[arg(long)]
+        dry_run: bool,
     },
+}
+
+impl ShareCommand {
+    /// The canonical dotted path of this command.
+    pub const fn path(&self) -> &'static str {
+        match self {
+            Self::List => "share list",
+            Self::Rescan => "share rescan",
+            Self::Add { .. } => "share add",
+            Self::Remove { .. } => "share remove",
+        }
+    }
 }
 
 /// One share row.
@@ -59,23 +78,26 @@ pub struct InitArgs {
     /// Address clients use (embedded in the certificate).
     #[arg(long)]
     pub server_ip: Option<String>,
-    /// Accept defaults without prompting.
+    /// Accept the detected values without prompting.
     #[arg(long)]
-    pub non_interactive: bool,
+    pub yes: bool,
+    /// Overwrite an existing configuration file.
+    #[arg(long)]
+    pub force: bool,
 }
 
 /// Dispatch a share operation.
-pub fn run(config_path: &Path, command: ShareCommand) -> Result<()> {
+pub fn run(config_path: &Path, command: ShareCommand) -> Result<Outcome> {
     match command {
-        ShareCommand::List(json) => list(config_path, json),
+        ShareCommand::List => list(config_path),
         ShareCommand::Rescan => rescan(config_path),
-        ShareCommand::Add { name, dir } => add(config_path, &name, &dir),
-        ShareCommand::Remove { name, yes } => remove(config_path, &name, yes),
+        ShareCommand::Add { name, dir, dry_run } => add(config_path, &name, &dir, dry_run),
+        ShareCommand::Remove { name, yes, dry_run } => remove(config_path, &name, yes, dry_run),
     }
 }
 
 /// List the declared shares.
-fn list(config_path: &Path, json: JsonFlag) -> Result<()> {
+fn list(config_path: &Path) -> Result<Outcome> {
     let config = Config::load(config_path)?;
     let rows: Vec<ShareRow> = config
         .shares
@@ -85,23 +107,33 @@ fn list(config_path: &Path, json: JsonFlag) -> Result<()> {
             dir: dir.display().to_string(),
         })
         .collect();
-    if json.json {
-        return print_json(&rows);
-    }
-    for row in rows {
-        println!("{:<16} {}", row.name, row.dir);
-    }
-    Ok(())
+    let table = format_rows(
+        &rows
+            .iter()
+            .map(|row| vec![row.name.clone(), row.dir.clone()])
+            .collect::<Vec<_>>(),
+    );
+    let lines = if rows.is_empty() {
+        vec!["no shares".to_string()]
+    } else {
+        table
+    };
+    Ok(Outcome::text(lines).with_data(&rows))
 }
 
 /// Regenerate the manifests.
-fn rescan(config_path: &Path) -> Result<()> {
+fn rescan(config_path: &Path) -> Result<Outcome> {
     let config = Config::load(config_path)?;
-    report_regeneration(&config)
+    let mut outcome = Outcome::new();
+    report_regeneration(&config, &mut outcome)?;
+    if outcome.lines.is_empty() {
+        outcome.lines.push("manifest regenerated".to_string());
+    }
+    Ok(outcome)
 }
 
 /// Add a share to the configuration, creating the directory if absent.
-fn add(config_path: &Path, name: &str, dir: &Path) -> Result<()> {
+fn add(config_path: &Path, name: &str, dir: &Path, dry_run: bool) -> Result<Outcome> {
     let config = Config::load(config_path)?;
     if config.shares.contains_key(name) {
         return Err(Error::Config(format!("share {name} already exists")));
@@ -117,15 +149,33 @@ fn add(config_path: &Path, name: &str, dir: &Path) -> Result<()> {
             dir.display()
         )));
     }
-    crate::config_edit::append_share(config_path, name, dir)?;
-    tracing::info!("share {name} added");
-    Ok(())
+    let summary = if dry_run {
+        format!("would add share {name} = {}", dir.display())
+    } else {
+        crate::config_edit::append_share(config_path, name, dir)?;
+        format!("added share {name}")
+    };
+    Ok(Outcome::new()
+        .line(summary)
+        .with_data(&serde_json::json!({ "name": name, "dir": dir, "dry_run": dry_run })))
 }
 
 /// Remove a share from the configuration.
-fn remove(config_path: &Path, name: &str, yes: bool) -> Result<()> {
-    crate::confirm::require(yes, &format!("remove share {name}"))?;
-    crate::config_edit::remove_share(config_path, name)?;
-    tracing::info!("share {name} removed");
-    Ok(())
+fn remove(config_path: &Path, name: &str, yes: bool, dry_run: bool) -> Result<Outcome> {
+    let config = Config::load(config_path)?;
+    if !config.shares.contains_key(name) {
+        return Err(Error::Config(format!("no such share: {name}")));
+    }
+    if !dry_run {
+        crate::confirm::require(yes, &format!("remove share {name}"))?;
+    }
+    let summary = if dry_run {
+        format!("would remove share {name}")
+    } else {
+        crate::config_edit::remove_share(config_path, name)?;
+        format!("removed share {name}")
+    };
+    Ok(Outcome::new()
+        .line(summary)
+        .with_data(&serde_json::json!({ "name": name, "dry_run": dry_run })))
 }

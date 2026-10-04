@@ -185,8 +185,8 @@ pub struct Regenerated {
 
 /// Regenerate every share manifest and every per-account filtered manifest.
 ///
-/// This is the single implementation behind `make rescan` and every CLI
-/// mutation that changes accounts or the access mapping.
+/// This is the single implementation behind `lanpull share rescan` and every
+/// CLI mutation that changes accounts or the access mapping.
 pub fn regenerate(config: &Config) -> Result<Regenerated> {
     let clients = Clients::load(&config.clients_path)?;
     let policy = Policy::load(&config.access_path)?;

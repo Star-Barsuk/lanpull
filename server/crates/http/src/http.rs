@@ -50,7 +50,7 @@ const HOST_HEADER: &str = "x-lanpull-host";
 /// Shared server state.
 ///
 /// Accounts, the access policy, and arm state are re-read (through [`LiveCache`])
-/// on every request so that `remove-client`, `passwd`, `arm`, `disarm`, and
+/// on every request so that `account remove`, `account passwd`, `account arm`, `account disarm`, and
 /// policy edits take effect immediately without restarting the server
 /// (`docs/SPEC.md` sections 8 and 13).
 #[derive(Debug, Clone)]
@@ -301,7 +301,7 @@ async fn serve_share_manifest(
         Ok(metadata) if metadata.is_file() => serve_file(path, method, headers).await,
         _ => text_response(
             StatusCode::SERVICE_UNAVAILABLE,
-            "server has no manifest for this account; ask the operator to run make rescan",
+            "server has no manifest for this account; run 'lanpull share rescan'",
         ),
     }
 }
@@ -509,7 +509,7 @@ pub async fn serve(config: Config) -> Result<()> {
     let clients = Clients::load(&config.clients_path)?;
     if clients.is_empty() {
         return Err(Error::Config(
-            "no client accounts; run `lanpull add-client` first".to_string(),
+            "no client accounts; run 'lanpull account add' first".to_string(),
         ));
     }
     if !config.cert_path.is_file() {

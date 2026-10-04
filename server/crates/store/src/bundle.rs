@@ -36,7 +36,7 @@ pub struct BundleManifest {
 pub fn build(client_dir: &Path) -> Result<BundleManifest> {
     let missing = || {
         Error::Server(
-            "server has no client bundle; ask the operator to run make client-bundle".to_string(),
+            "server has no client bundle; ask the operator to reinstall or run 'make client-bundle'".to_string(),
         )
     };
 

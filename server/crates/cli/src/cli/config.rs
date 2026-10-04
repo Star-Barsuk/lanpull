@@ -7,13 +7,13 @@ use lanpull_core::config::Config;
 use lanpull_core::error::{Error, Result};
 use serde::Serialize;
 
-use crate::cli::{print_json, JsonFlag};
+use crate::cli::Outcome;
 
 /// Configuration operations.
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
     /// Print the resolved configuration and its paths.
-    Show(JsonFlag),
+    Show,
     /// Print one configuration value.
     Get {
         /// Key, for example `STATE_DIR` or `PORT`.
@@ -25,7 +25,24 @@ pub enum ConfigCommand {
         key: String,
         /// New value.
         value: String,
+        /// Show what would change without writing the configuration.
+        #[arg(long)]
+        dry_run: bool,
     },
+    /// Print the resolved configuration file path.
+    Path,
+}
+
+impl ConfigCommand {
+    /// The canonical dotted path of this command.
+    pub const fn path(&self) -> &'static str {
+        match self {
+            Self::Show => "config show",
+            Self::Get { .. } => "config get",
+            Self::Set { .. } => "config set",
+            Self::Path => "config path",
+        }
+    }
 }
 
 /// The full resolved configuration, for `config show`.
@@ -45,16 +62,23 @@ struct ConfigView {
 }
 
 /// Dispatch a configuration operation.
-pub fn run(config_path: &Path, command: ConfigCommand) -> Result<()> {
+pub fn run(config_path: &Path, command: ConfigCommand) -> Result<Outcome> {
     match command {
-        ConfigCommand::Show(json) => show(config_path, json),
+        ConfigCommand::Show => show(config_path),
         ConfigCommand::Get { key } => get(config_path, &key),
-        ConfigCommand::Set { key, value } => set(config_path, &key, &value),
+        ConfigCommand::Set {
+            key,
+            value,
+            dry_run,
+        } => set(config_path, &key, &value, dry_run),
+        ConfigCommand::Path => Ok(Outcome::new()
+            .line(config_path.display().to_string())
+            .with_data(&serde_json::json!({ "path": config_path }))),
     }
 }
 
 /// Print the resolved configuration.
-fn show(config_path: &Path, json: JsonFlag) -> Result<()> {
+fn show(config_path: &Path) -> Result<Outcome> {
     let config = Config::load(config_path)?;
     let view = ConfigView {
         path: config_path.display().to_string(),
@@ -73,48 +97,68 @@ fn show(config_path: &Path, json: JsonFlag) -> Result<()> {
         access_path: config.access_path.display().to_string(),
         audit_log: config.audit_log.display().to_string(),
     };
-    if json.json {
-        return print_json(&view);
-    }
-    println!("config:      {}", view.path);
+    let port = view.port.to_string();
+    let mut lines = vec![format!("{:<14}{}", "config:", view.path)];
     for (name, dir) in &view.shares {
-        println!("SHARE_{name:<10} {dir}");
+        lines.push(format!("{name}: {dir}"));
     }
-    println!("STATE_DIR:   {}", view.state_dir);
-    println!("BIND:        {}", view.bind);
-    println!("PORT:        {}", view.port);
-    println!("SERVER_IP:   {}", view.server_ip);
-    println!("CERT_PATH:   {}", view.cert_path);
-    println!("KEY_PATH:    {}", view.key_path);
-    println!("CLIENTS_PATH:{}", view.clients_path);
-    println!("ACCESS_PATH: {}", view.access_path);
-    println!("AUDIT_LOG:   {}", view.audit_log);
-    Ok(())
+    for (key, value) in [
+        ("STATE_DIR:", view.state_dir.as_str()),
+        ("BIND:", view.bind.as_str()),
+        ("PORT:", port.as_str()),
+        ("SERVER_IP:", view.server_ip.as_str()),
+        ("CERT_PATH:", view.cert_path.as_str()),
+        ("KEY_PATH:", view.key_path.as_str()),
+        ("CLIENTS_PATH:", view.clients_path.as_str()),
+        ("ACCESS_PATH:", view.access_path.as_str()),
+        ("AUDIT_LOG:", view.audit_log.as_str()),
+    ] {
+        lines.push(format!("{key:<14}{value}"));
+    }
+    Ok(Outcome::text(lines).with_data(&view))
 }
 
 /// Print one configuration value.
-fn get(config_path: &Path, key: &str) -> Result<()> {
+fn get(config_path: &Path, key: &str) -> Result<Outcome> {
     let config = Config::load(config_path)?;
-    let value = match key {
-        "STATE_DIR" => config.state_dir.display().to_string(),
-        "BIND" => config.bind.to_string(),
-        "PORT" => config.port.to_string(),
-        "SERVER_IP" => config.server_ip.to_string(),
-        "CERT_PATH" => config.cert_path.display().to_string(),
-        "KEY_PATH" => config.key_path.display().to_string(),
-        "CLIENTS_PATH" => config.clients_path.display().to_string(),
-        "ACCESS_PATH" => config.access_path.display().to_string(),
-        "AUDIT_LOG" => config.audit_log.display().to_string(),
-        other => crate::config_edit::get(config_path, other)?
-            .ok_or_else(|| Error::Config(format!("unknown key: {other}")))?,
+    let value = if let Some(value) = resolved_value(&config, key) {
+        value
+    } else {
+        crate::config_edit::get(config_path, key)?
+            .ok_or_else(|| Error::Config(format!("unknown key: {key}")))?
     };
-    println!("{value}");
-    Ok(())
+    Ok(Outcome::new()
+        .line(value.clone())
+        .with_data(&serde_json::json!({ "key": key, "value": value })))
 }
 
 /// Set one configuration value.
-fn set(config_path: &Path, key: &str, value: &str) -> Result<()> {
-    let settable = [
+fn set(config_path: &Path, key: &str, value: &str, dry_run: bool) -> Result<Outcome> {
+    if key.starts_with("SHARE_") {
+        return Err(Error::Config(
+            "use 'lanpull share add' to add a share".to_string(),
+        ));
+    }
+    if !settable().contains(&key) {
+        return Err(Error::Config(format!("unknown key: {key}")));
+    }
+    if value.is_empty() {
+        return Err(Error::Usage(format!("{key} must not be empty")));
+    }
+    let summary = if dry_run {
+        format!("would set {key}={value}")
+    } else {
+        crate::config_edit::set(config_path, key, value)?;
+        format!("set {key}={value}")
+    };
+    Ok(Outcome::new()
+        .line(summary)
+        .with_data(&serde_json::json!({ "key": key, "value": value, "dry_run": dry_run })))
+}
+
+/// The keys accepted by `config get`/`config set` and resolved by the loader.
+const fn settable() -> [&'static str; 9] {
+    [
         "STATE_DIR",
         "BIND",
         "PORT",
@@ -124,16 +168,21 @@ fn set(config_path: &Path, key: &str, value: &str) -> Result<()> {
         "CLIENTS_PATH",
         "ACCESS_PATH",
         "AUDIT_LOG",
-    ];
-    if key.starts_with("SHARE_") {
-        return Err(Error::Config(
-            "use 'lanpull share add' to add a share".to_string(),
-        ));
+    ]
+}
+
+/// Resolve a key from the loaded configuration, or `None` for raw keys.
+fn resolved_value(config: &Config, key: &str) -> Option<String> {
+    match key {
+        "STATE_DIR" => Some(config.state_dir.display().to_string()),
+        "BIND" => Some(config.bind.to_string()),
+        "PORT" => Some(config.port.to_string()),
+        "SERVER_IP" => Some(config.server_ip.to_string()),
+        "CERT_PATH" => Some(config.cert_path.display().to_string()),
+        "KEY_PATH" => Some(config.key_path.display().to_string()),
+        "CLIENTS_PATH" => Some(config.clients_path.display().to_string()),
+        "ACCESS_PATH" => Some(config.access_path.display().to_string()),
+        "AUDIT_LOG" => Some(config.audit_log.display().to_string()),
+        _ => None,
     }
-    if !settable.contains(&key) {
-        return Err(Error::Config(format!("unknown key: {key}")));
-    }
-    crate::config_edit::set(config_path, key, value)?;
-    tracing::info!("{key} updated");
-    Ok(())
 }

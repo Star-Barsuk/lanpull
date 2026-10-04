@@ -3,22 +3,27 @@
 //! The taxonomy groups operations by object:
 //! `init`, `serve`, `status`, `account`, `access`, `share`, `service`,
 //! `config`, `cert`, `audit`, `report`, `clean`.
+//!
+//! Every command writes its result to stdout and its diagnostics to stderr.
+//! With `--json` stdout carries one envelope document instead of text; the
+//! process exit code is unchanged.
 
 pub mod access;
 pub mod account;
 pub mod config;
 pub mod misc;
+pub mod output;
 pub mod service;
 pub mod share;
 
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use lanpull_core::error::Result;
 
 use crate::cli::access::AccessCommand;
 use crate::cli::account::AccountCommand;
 use crate::cli::config::ConfigCommand;
+pub use crate::cli::output::{emit, emit_error, Outcome};
 use crate::cli::service::ServiceCommand;
 use crate::cli::share::ShareCommand;
 
@@ -30,6 +35,9 @@ pub struct Cli {
     /// the canonical `/etc/lanpull/lanpull.conf`.
     #[arg(long, global = true)]
     pub config: Option<PathBuf>,
+    /// Print machine-readable JSON on stdout instead of text.
+    #[arg(long, global = true)]
+    pub json: bool,
     /// Increase verbosity (repeatable). Overrides `$RUST_LOG`.
     #[arg(long, short = 'v', global = true, action = clap::ArgAction::Count)]
     pub verbose: u8,
@@ -49,7 +57,7 @@ pub enum Command {
     /// Run the HTTPS server (production uses the systemd unit).
     Serve,
     /// Warn on a stale manifest and show armed accounts.
-    Status(misc::StatusArgs),
+    Status,
     /// Manage accounts, passwords, and the arm window.
     Account {
         /// Account operation.
@@ -81,27 +89,35 @@ pub enum Command {
         command: ConfigCommand,
     },
     /// Generate the self-signed TLS certificate.
-    Cert,
+    Cert {
+        /// Overwrite an existing certificate and key.
+        #[arg(long)]
+        force: bool,
+    },
     /// Audit the artifacts lanpull created on this host.
-    Audit(misc::AuditArgs),
+    Audit,
     /// Summarize the audit log.
     Report(misc::ReportArgs),
     /// Remove runtime leftovers.
     Clean(misc::CleanArgs),
 }
 
-/// Whether output should be machine-readable JSON.
-#[derive(Debug, Clone, Copy, Default, clap::Args)]
-pub struct JsonFlag {
-    /// Print machine-readable JSON instead of text.
-    #[arg(long)]
-    pub json: bool,
-}
-
-/// Print a value as pretty JSON to stdout.
-pub fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
-    let text = serde_json::to_string_pretty(value)
-        .map_err(|e| lanpull_core::error::Error::Config(format!("JSON: {e}")))?;
-    println!("{text}");
-    Ok(())
+impl Command {
+    /// The canonical dotted path of this command, used in the JSON envelope.
+    pub const fn path(&self) -> &'static str {
+        match self {
+            Self::Init(_) => "init",
+            Self::Serve => "serve",
+            Self::Status => "status",
+            Self::Account { command } => command.path(),
+            Self::Access { command } => command.path(),
+            Self::Share { command } => command.path(),
+            Self::Service { command } => command.path(),
+            Self::Config { command } => command.path(),
+            Self::Cert { .. } => "cert",
+            Self::Audit => "audit",
+            Self::Report(_) => "report",
+            Self::Clean(_) => "clean",
+        }
+    }
 }

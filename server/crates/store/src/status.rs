@@ -36,7 +36,7 @@ pub fn startup_warnings(config: &Config) -> Vec<String> {
                 );
             }
             Err(_) => warnings.push(format!(
-                "{share}: no manifest yet; run make rescan before the first pull"
+                "{share}: no manifest yet; run 'lanpull share rescan' before the first pull"
             )),
         }
         match walk_warnings(dir) {
@@ -70,7 +70,9 @@ pub fn run(config: &Config) -> Result<Vec<String>> {
                         .map(|warning| format!("{share}: {warning}")),
                 );
             }
-            Err(_) => lines.push(format!("manifest {share}: MISSING (run make rescan)")),
+            Err(_) => lines.push(format!(
+                "manifest {share}: MISSING (run 'lanpull share rescan')"
+            )),
         }
         lines.extend(
             walk_warnings(dir)?
@@ -116,7 +118,8 @@ pub fn freshness_warnings(share: &Path, manifest: &Manifest) -> Vec<String> {
             if let Ok(generated) = timeutil::parse_iso8601(&manifest.generated_at) {
                 if newest > generated {
                     warnings.push(
-                        "share has files newer than the manifest; run make rescan".to_string(),
+                        "share has files newer than the manifest; run 'lanpull share rescan'"
+                            .to_string(),
                     );
                 }
             }

@@ -1,7 +1,7 @@
 //! Live cache of on-disk server state.
 //!
 //! Accounts, the access policy, and arm state are read per request so that
-//! `remove-client`, `passwd`, `arm`, `disarm`, and policy edits take effect
+//! `account remove`, `account passwd`, `account arm`, `account disarm`, and policy edits take effect
 //! without a restart. Re-parsing the files on every request is wasteful, so
 //! each value is cached and invalidated when its files change. The cache key is
 //! `mtime + size + inode`; lanpull writes those files by atomic rename, which

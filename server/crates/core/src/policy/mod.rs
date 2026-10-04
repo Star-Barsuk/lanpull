@@ -127,9 +127,19 @@ impl Policy {
         let mut access = Access::new();
         for (share, policy) in &self.shares {
             for account in clients.iter() {
-                for path in policy.effective(&account.name) {
+                for path in policy.allowed(&account.name) {
                     let glob = Glob::parse(&path)?;
                     access.add_rule(
+                        &account.name,
+                        Rule {
+                            share: Some(share.clone()),
+                            glob: Some(glob),
+                        },
+                    );
+                }
+                for path in policy.denied(&account.name) {
+                    let glob = Glob::parse(&path)?;
+                    access.deny_rule(
                         &account.name,
                         Rule {
                             share: Some(share.clone()),
@@ -153,7 +163,7 @@ impl Policy {
     /// Return `true` when `account` would see at least one path once created.
     ///
     /// Unlike [`Policy::expand`], this does not require the account to exist in
-    /// the account file: it answers the question `add-client` asks before the
+    /// the account file: it answers the question `account add` asks before the
     /// account is written, so a `public` rule grants a brand-new account access.
     pub fn has_effective_rules(&self, account: &str) -> bool {
         self.shares
@@ -177,8 +187,14 @@ impl Policy {
 }
 
 impl SharePolicy {
-    /// The effective, sorted path set for an account.
-    pub fn effective(&self, account: &str) -> BTreeSet<String> {
+    /// The allow globs for an account: `public` minus exact-path removals, plus
+    /// the account's `add` entries.
+    ///
+    /// A `remove` that targets a path covered only by a glob in `public` cannot
+    /// be represented as a static set difference; it is returned by [`SharePolicy::denied`]
+    /// and enforced at match time by [`crate::access::Access`]. Exact removals
+    /// of an exact `public` entry are subtracted here as before.
+    pub fn allowed(&self, account: &str) -> BTreeSet<String> {
         let mut set = self.public.clone();
         if let Some(deltas) = self.clients.get(account) {
             for path in &deltas.remove {
@@ -191,12 +207,28 @@ impl SharePolicy {
         set
     }
 
+    /// The deny globs for an account (its `remove` entries).
+    pub fn denied(&self, account: &str) -> BTreeSet<String> {
+        self.clients
+            .get(account)
+            .map_or_else(BTreeSet::new, |deltas| deltas.remove.clone())
+    }
+
+    /// The effective, sorted allow set for an account.
+    ///
+    /// Retained for callers that only need the positive set (for example the
+    /// `has_effective_rules` check); per-path authorization goes through
+    /// [`crate::access::Access`], which also applies [`SharePolicy::denied`].
+    pub fn effective(&self, account: &str) -> BTreeSet<String> {
+        self.allowed(account)
+    }
+
     /// Record an addition for an account.
     ///
     /// A path already in `public` needs no `add` entry: clearing any earlier
     /// removal is enough. Otherwise the path joins the account's `add` set.
     pub fn add_for(&mut self, account: &str, path: String) {
-        if self.public.contains(&path) {
+        if self.public.contains(&path) || self.public_covers(&path) {
             if let Some(deltas) = self.clients.get_mut(account) {
                 deltas.remove.remove(&path);
             }
@@ -218,7 +250,7 @@ impl SharePolicy {
         if let Some(deltas) = self.clients.get_mut(account) {
             deltas.add.remove(path);
         }
-        if self.public.contains(path) {
+        if self.public.contains(path) || self.public_covers(path) {
             self.clients
                 .entry(account.to_string())
                 .or_default()
@@ -226,6 +258,13 @@ impl SharePolicy {
                 .insert(path.to_string());
         }
         self.prune(account);
+    }
+
+    /// Return `true` when any `public` glob covers the concrete `path`.
+    fn public_covers(&self, path: &str) -> bool {
+        self.public
+            .iter()
+            .any(|rule| Glob::parse(rule).is_ok_and(|glob| glob.covers(path)))
     }
 
     /// Drop an account's delta entry when it holds nothing.
@@ -324,6 +363,37 @@ mod tests {
         let access = policy.expand(&clients(&["alpha", "beta"])).unwrap();
         assert!(access.allows("alpha", "cube", "sub/f.pdf"));
         assert!(!access.allows("beta", "cube", "sub/f.pdf"));
+    }
+
+    #[test]
+    fn remove_below_a_public_glob_records_a_delta() {
+        // A literal path covered by a public glob (for example `**`) must get a
+        // `remove` delta, so it is hidden for that one account and stays served
+        // as 403 rather than 200.
+        let mut policy = Policy::new();
+        let share = policy.share_mut("cube").unwrap();
+        share.public.insert("**".to_string());
+        share.remove_for("alpha", "sub/secret.pdf");
+        assert!(
+            share.clients["alpha"].remove.contains("sub/secret.pdf"),
+            "remove delta must be recorded under a public glob"
+        );
+        let access = policy.expand(&clients(&["alpha", "beta"])).unwrap();
+        assert!(!access.allows("alpha", "cube", "sub/secret.pdf"));
+        assert!(access.allows("alpha", "cube", "sub/other.pdf"));
+        assert!(access.allows("beta", "cube", "sub/secret.pdf"));
+    }
+
+    #[test]
+    fn re_add_below_a_public_glob_clears_the_delta() {
+        let mut policy = Policy::new();
+        let share = policy.share_mut("cube").unwrap();
+        share.public.insert("**".to_string());
+        share.remove_for("alpha", "sub/secret.pdf");
+        share.add_for("alpha", "sub/secret.pdf".to_string());
+        assert!(!share.clients.contains_key("alpha"));
+        let access = policy.expand(&clients(&["alpha"])).unwrap();
+        assert!(access.allows("alpha", "cube", "sub/secret.pdf"));
     }
 
     #[test]

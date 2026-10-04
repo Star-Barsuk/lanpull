@@ -1,23 +1,37 @@
 //! `lanpull init` — create the configuration and state for this machine.
 //!
-//! Replaces the former `init-config.sh`: it derives the LAN address from the
-//! routing table, prompts for the remaining values, creates the share and state
-//! directories, and writes the configuration file (mode 0600).
+//! The command derives the LAN address from the routing table, prompts for the
+//! remaining values, creates the share and state directories, and writes the
+//! configuration file. When the target is the canonical `/etc/lanpull`, the
+//! directory and file are given the operator-readable ownership the service
+//! needs (group taken from `$SUDO_GID`).
 
 use std::io::{BufRead as _, IsTerminal as _, Write as _};
 use std::net::IpAddr;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 
 use lanpull_core::config as core_config;
 use lanpull_core::error::{Error, Result};
 
 use crate::cli::share::InitArgs;
+use crate::cli::Outcome;
 
 /// Run `lanpull init`.
-pub fn run(config_path: &Path, args: &InitArgs) -> Result<()> {
+pub fn run(config_path: &Path, args: &InitArgs) -> Result<Outcome> {
     use std::fmt::Write as _;
 
     let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
+
+    // The canonical configuration needs root: it is created root-owned with the
+    // operator group. Refuse before touching the filesystem so a normal user
+    // gets an actionable message instead of a raw permission error.
+    if config_dir == Path::new(core_config::DEFAULT_CONFIG_DIR) && effective_uid() != 0 {
+        return Err(Error::Usage(format!(
+            "{} needs root; run 'sudo lanpull init'",
+            config_dir.display()
+        )));
+    }
 
     let shares = resolve_shares(&args.shares)?;
     let state_dir = args
@@ -36,9 +50,9 @@ pub fn run(config_path: &Path, args: &InitArgs) -> Result<()> {
         None => detect_server_ip()?,
     };
 
-    if config_path.exists() && !args.non_interactive {
-        return Err(Error::Config(format!(
-            "{} already exists; remove it or pass --non-interactive",
+    if config_path.exists() && !args.force {
+        return Err(Error::Usage(format!(
+            "{} already exists; pass --force to overwrite",
             config_path.display()
         )));
     }
@@ -68,13 +82,64 @@ pub fn run(config_path: &Path, args: &InitArgs) -> Result<()> {
     let _ = writeln!(text, "AUDIT_LOG={}", state_dir.join("access.log").display());
 
     lanpull_core::atomic::write_private(config_path, text.as_bytes())?;
+    harden_canonical(config_dir, config_path)?;
     // Validate before reporting success.
     core_config::Config::load(config_path)?;
 
-    println!("wrote {}", config_path.display());
-    println!("  STATE_DIR={}", state_dir.display());
-    println!("  SERVER_IP={server_ip}");
+    let shares_json: Vec<serde_json::Value> = shares
+        .iter()
+        .map(|(name, dir)| serde_json::json!({ "name": name, "dir": dir }))
+        .collect();
+    let outcome = Outcome::new()
+        .line(format!("wrote {}", config_path.display()))
+        .line(format!("  STATE_DIR={}", state_dir.display()))
+        .line(format!("  SERVER_IP={server_ip}"))
+        .with_data(&serde_json::json!({
+            "path": config_path,
+            "state_dir": state_dir,
+            "server_ip": server_ip.to_string(),
+            "shares": shares_json,
+        }));
+    Ok(outcome)
+}
+
+/// Give a canonical configuration the ownership the service needs.
+///
+/// `/etc/lanpull` becomes `root:<group>` mode `0770` and the file
+/// `root:<group>` mode `0640`, where `<group>` comes from `$SUDO_GID` when the
+/// command ran under `sudo`. Outside `/etc/lanpull` nothing changes. The caller
+/// has already ensured the canonical path is only written as root.
+fn harden_canonical(config_dir: &Path, config_path: &Path) -> Result<()> {
+    if config_dir != Path::new(core_config::DEFAULT_CONFIG_DIR) {
+        return Ok(());
+    }
+    let group = std::env::var("SUDO_GID")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok());
+    std::fs::set_permissions(config_dir, std::fs::Permissions::from_mode(0o770))?;
+    std::fs::set_permissions(config_path, std::fs::Permissions::from_mode(0o640))?;
+    if let Some(gid) = group {
+        std::os::unix::fs::chown(config_dir, Some(0), Some(gid))?;
+        std::os::unix::fs::chown(config_path, Some(0), Some(gid))?;
+    }
     Ok(())
+}
+
+/// The process's effective UID, read from `/proc/self/status`.
+fn effective_uid() -> u32 {
+    let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
+        return u32::MAX;
+    };
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("Uid:") {
+            if let Some(effective) = rest.split_whitespace().nth(1) {
+                if let Ok(uid) = effective.parse::<u32>() {
+                    return uid;
+                }
+            }
+        }
+    }
+    u32::MAX
 }
 
 /// Parse `name=path` share specifications, defaulting to a single `default`.
@@ -90,9 +155,9 @@ fn resolve_shares(specs: &[String]) -> Result<Vec<(String, PathBuf)>> {
     for spec in specs {
         let (name, path) = spec
             .split_once('=')
-            .ok_or_else(|| Error::Config(format!("invalid --share {spec}: expected name=path")))?;
+            .ok_or_else(|| Error::Usage(format!("invalid --share {spec}: expected name=path")))?;
         if !core_config::valid_share_name(name) {
-            return Err(Error::Config(format!(
+            return Err(Error::Usage(format!(
                 "invalid share name {name}: must match ^[a-z0-9][a-z0-9_-]*$"
             )));
         }
@@ -101,23 +166,30 @@ fn resolve_shares(specs: &[String]) -> Result<Vec<(String, PathBuf)>> {
     Ok(shares)
 }
 
-/// Create the state directory, escalating to sudo when needed.
+/// Create the state directory when this user may; otherwise defer to install.
+///
+/// `lanpull init` may run as the operator before `make install`, and the
+/// default `/var/lib/lanpull` needs root. A permission failure is not fatal
+/// here: the install script creates the directory with the right owner and
+/// mode.
 fn create_state_dir(state_dir: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
     if state_dir.is_dir() {
         return Ok(());
     }
-    if let Some(parent) = state_dir.parent() {
-        if parent.exists() {
-            std::fs::create_dir_all(state_dir)?;
+    match std::fs::create_dir_all(state_dir) {
+        Ok(()) => {
             std::fs::set_permissions(state_dir, std::fs::Permissions::from_mode(0o700))?;
-            return Ok(());
+            Ok(())
         }
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            tracing::warn!(
+                "cannot create {} as this user; 'make install' creates it with the right owner",
+                state_dir.display()
+            );
+            Ok(())
+        }
+        Err(e) => Err(e.into()),
     }
-    Err(Error::Config(format!(
-        "cannot create {}; create it as root with mode 700",
-        state_dir.display()
-    )))
 }
 
 /// Detect the host's private LAN address from the main routing table.

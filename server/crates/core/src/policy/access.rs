@@ -88,6 +88,19 @@ impl Glob {
     pub fn as_str(&self) -> &str {
         &self.raw
     }
+
+    /// Return `true` when this glob matches the concrete share-relative `path`.
+    ///
+    /// Used by the policy editor to decide whether removing a literal path needs
+    /// a `remove` delta: it does both for an exact `public` entry and for a
+    /// `public` glob (for example `**`) that covers the path.
+    pub fn covers(&self, path: &str) -> bool {
+        if relpath::validate(path).is_err() {
+            return false;
+        }
+        let segments: Vec<&str> = path.split('/').collect();
+        match_segments(&self.segments, &segments)
+    }
 }
 
 /// Parse one glob segment.
@@ -210,9 +223,16 @@ impl Rule {
 }
 
 /// The parsed access mapping.
+///
+/// An account's effective access is its allow rules minus its deny rules. A
+/// deny rule is produced when a per-account `remove` subtracts a path from the
+/// `public` set; because `public` may hold a glob (for example `**`), the
+/// subtraction is applied per requested path at match time rather than as a
+/// static set difference.
 #[derive(Debug, Default, Clone)]
 pub struct Access {
     rules: BTreeMap<String, Vec<Rule>>,
+    denied: BTreeMap<String, Vec<Rule>>,
 }
 
 impl Access {
@@ -221,12 +241,21 @@ impl Access {
         Self::default()
     }
 
-    /// Return the rules for an account.
+    /// Return the allow rules for an account.
     pub fn rules(&self, account: &str) -> &[Rule] {
         self.rules.get(account).map_or(&[], Vec::as_slice)
     }
 
-    /// Return `true` when the account has at least one rule.
+    /// Return the deny rules for an account.
+    pub fn denied_rules(&self, account: &str) -> &[Rule] {
+        self.denied.get(account).map_or(&[], Vec::as_slice)
+    }
+
+    /// Return `true` when the account has at least one effective allow rule.
+    ///
+    /// An account whose only rules are denied everywhere is not considered to
+    /// have access; the caller cannot know the concrete paths here, so any
+    /// allow rule counts.
     pub fn has_rules(&self, account: &str) -> bool {
         self.rules
             .get(account)
@@ -243,18 +272,30 @@ impl Access {
     /// Return `true` when the account may read `path` inside `share`.
     pub fn allows(&self, account: &str, share: &str, path: &str) -> bool {
         let segments: Vec<&str> = path.split('/').collect();
-        self.rules(account).iter().any(|rule| {
+        let matched = |rule: &Rule| {
             rule.matches_share(share)
                 && rule
                     .glob
                     .as_ref()
                     .is_none_or(|glob| match_segments(&glob.segments, &segments))
-        })
+        };
+        if self.denied_rules(account).iter().any(matched) {
+            return false;
+        }
+        self.rules(account).iter().any(matched)
     }
 
-    /// Add a rule for an account.
+    /// Add an allow rule for an account.
     pub fn add_rule(&mut self, account: &str, rule: Rule) {
         self.rules
+            .entry(account.to_string())
+            .or_default()
+            .push(rule);
+    }
+
+    /// Add a deny rule for an account.
+    pub fn deny_rule(&mut self, account: &str, rule: Rule) {
+        self.denied
             .entry(account.to_string())
             .or_default()
             .push(rule);

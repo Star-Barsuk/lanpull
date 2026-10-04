@@ -9,15 +9,8 @@ use lanpull_core::timeutil;
 use lanpull_store::status;
 use serde::Serialize;
 
-use crate::cli::print_json;
-
-/// Arguments for `status`.
-#[derive(Debug, clap::Args)]
-pub struct StatusArgs {
-    /// Print machine-readable JSON.
-    #[arg(long)]
-    pub json: bool,
-}
+use crate::cli::output::format_rows;
+use crate::cli::Outcome;
 
 /// Arguments for `report`.
 #[derive(Debug, clap::Args)]
@@ -28,17 +21,6 @@ pub struct ReportArgs {
     /// Only show requests newer than this duration, for example `7d`.
     #[arg(long)]
     pub since: Option<String>,
-    /// Print machine-readable JSON.
-    #[arg(long)]
-    pub json: bool,
-}
-
-/// Arguments for `audit`.
-#[derive(Debug, clap::Args)]
-pub struct AuditArgs {
-    /// Print machine-readable JSON.
-    #[arg(long)]
-    pub json: bool,
 }
 
 /// Arguments for `clean`.
@@ -53,20 +35,19 @@ pub struct CleanArgs {
 }
 
 /// Show operator status.
-pub fn status(config_path: &Path, args: StatusArgs) -> Result<()> {
+pub fn status(config_path: &Path) -> Result<Outcome> {
     let config = Config::load(config_path)?;
     let lines = status::run(&config)?;
-    if args.json {
-        return print_json(&lines);
-    }
-    for line in lines {
-        println!("{line}");
-    }
-    Ok(())
+    let text = if lines.is_empty() {
+        vec!["status is clean".to_string()]
+    } else {
+        lines.clone()
+    };
+    Ok(Outcome::text(text).with_data(&serde_json::json!({ "lines": lines })))
 }
 
 /// Summarize the audit log.
-pub fn report(config_path: &Path, args: ReportArgs) -> Result<()> {
+pub fn report(config_path: &Path, args: ReportArgs) -> Result<Outcome> {
     let config = Config::load(config_path)?;
     let cutoff = match args.since.as_deref() {
         Some(value) => {
@@ -76,13 +57,8 @@ pub fn report(config_path: &Path, args: ReportArgs) -> Result<()> {
         None => None,
     };
     let summary = audit::summarize(&config.audit_log, args.user.as_deref(), cutoff)?;
-    if args.json {
-        return print_json(&summary);
-    }
-    for line in summary.lines() {
-        println!("{line}");
-    }
-    Ok(())
+    let lines = summary.lines();
+    Ok(Outcome::text(lines).with_data(&summary))
 }
 
 /// One discovered artifact.
@@ -94,7 +70,7 @@ struct Artifact {
 }
 
 /// Audit the artifacts lanpull created on this host.
-pub fn audit(config_path: &Path, args: AuditArgs) -> Result<()> {
+pub fn audit(config_path: &Path) -> Result<Outcome> {
     let config = Config::load(config_path)?;
     let mut artifacts: Vec<Artifact> = Vec::new();
 
@@ -119,22 +95,28 @@ pub fn audit(config_path: &Path, args: AuditArgs) -> Result<()> {
         push(&format!("share:{name}"), dir.clone());
     }
 
-    if args.json {
-        return print_json(&artifacts);
-    }
-    for artifact in &artifacts {
-        let mark = if artifact.present {
-            "present"
-        } else {
-            "missing"
-        };
-        println!("{:<14} {:<8} {}", artifact.kind, mark, artifact.path);
-    }
-    Ok(())
+    let lines = format_rows(
+        &artifacts
+            .iter()
+            .map(|artifact| {
+                let mark = if artifact.present {
+                    "present"
+                } else {
+                    "missing"
+                };
+                vec![
+                    artifact.kind.clone(),
+                    mark.to_string(),
+                    artifact.path.clone(),
+                ]
+            })
+            .collect::<Vec<_>>(),
+    );
+    Ok(Outcome::text(lines).with_data(&artifacts))
 }
 
 /// Remove runtime leftovers that no other teardown step covers.
-pub fn clean(config_path: &Path, args: CleanArgs) -> Result<()> {
+pub fn clean(config_path: &Path, args: CleanArgs) -> Result<Outcome> {
     let config = Config::load(config_path)?;
     let mut targets: Vec<std::path::PathBuf> = Vec::new();
 
@@ -156,26 +138,37 @@ pub fn clean(config_path: &Path, args: CleanArgs) -> Result<()> {
     }
 
     if targets.is_empty() {
-        println!("nothing to clean");
-        return Ok(());
+        return Ok(Outcome::new()
+            .line("nothing to clean")
+            .with_data(&serde_json::json!({ "removed": [], "dry_run": args.dry_run })));
     }
     if args.dry_run {
-        for path in targets {
-            println!("would remove {}", path.display());
-        }
-        return Ok(());
+        let lines: Vec<String> = targets
+            .iter()
+            .map(|path| format!("would remove {}", path.display()))
+            .collect();
+        return Ok(Outcome::text(lines).with_data(&serde_json::json!({
+            "removed": targets,
+            "dry_run": true,
+        })));
     }
     crate::confirm::require(
         args.yes,
         &format!("remove {} leftover path(s)", targets.len()),
     )?;
-    for path in targets {
+    for path in &targets {
         if path.is_dir() {
-            std::fs::remove_dir_all(&path)?;
+            std::fs::remove_dir_all(path)?;
         } else {
-            std::fs::remove_file(&path)?;
+            std::fs::remove_file(path)?;
         }
-        tracing::info!("removed {}", path.display());
     }
-    Ok(())
+    let lines: Vec<String> = targets
+        .iter()
+        .map(|path| format!("removed {}", path.display()))
+        .collect();
+    Ok(Outcome::text(lines).with_data(&serde_json::json!({
+        "removed": targets,
+        "dry_run": false,
+    })))
 }
