@@ -3,7 +3,7 @@
 # Installed by `make install`, which substitutes the placeholders below with
 # the operator user and group, the configuration path, and the state directory. The unit
 # does NOT autostart on boot and has no [Install] section: the operator starts
-# it explicitly for an update round with `make up`.
+# it explicitly for an update round with `lanpull service start`.
 
 [Unit]
 Description=lanpull file-distribution server

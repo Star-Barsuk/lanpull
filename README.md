@@ -73,16 +73,17 @@ small pull-only mirror for a trusted local network.
          ---------------------------------------
          $SHARE_<name>/             one dir per share (any path)
          lanpull (single Rust binary)
-           serve        HTTPS on $BIND:$PORT, auth + arm + access mapping, Range
-           manifest     regenerate per-share and per-account manifests
-           add-client   create an account + stage a ready client folder
-           access       manage the JSON policy (public set + per-client deltas)
-           arm/disarm   authorize a client for a short window
-           report       who pulled what (from the audit log)
-           cert         self-signed certificate (SAN = IPs + localhost)
-           status       warn on stale manifests / symlinks / policy
-         config/lanpull.clients     accounts (argon2, mode 600)
-         config/lanpull.access.json access policy (mode 600)
+           serve            HTTPS on $BIND:$PORT, auth + arm + access, Range
+           share rescan     regenerate per-share and per-account manifests
+           account add      create an account + stage a ready client folder
+           access           manage the JSON policy (public set + per-client deltas)
+           account arm      authorize a client for a short window
+           report           who pulled what (from the audit log)
+           cert             self-signed certificate (SAN = IPs + localhost)
+           status           warn on stale manifests / symlinks / policy
+         /etc/lanpull/lanpull.conf      configuration (mode 640, root:group)
+         /etc/lanpull/lanpull.clients   accounts (argon2, mode 600)
+         /etc/lanpull/lanpull.access.json access policy (mode 600)
          $STATE_DIR/                manifests, caches, TLS material, log
                      |
                      |  HTTPS GET (Range, HTTP Basic), LAN only
@@ -129,25 +130,68 @@ the shares and paths it is granted; anything else is `403`.
 ```bash
 git clone <repo> lanpull
 cd lanpull
-make config      # generate config/lanpull.conf for this machine (prompts)
-# or: cp config/lanpull.conf.example config/lanpull.conf && $EDITOR config/lanpull.conf
-
 make setup       # Rust target and the quality-gate tooling
 make build       # static binary (x86_64-unknown-linux-musl)
-make install     # install the binary, the unit, and the client bundle (escalates as needed)
-make cert        # self-signed certificate (SAN = IP:<server-ip>)
-make rescan      # generate the manifest from <share-dir>
-make up          # start the service (no autostart on boot)
+make install     # install binary + unit + /etc/lanpull + client bundle (escalates as needed)
 ```
 
-`make config` derives `SERVER_IP` from the main routing table, so it ignores
-proxy/tunnel addresses and never names an interface, then writes the file mode
-600 and creates the directories. It needs `sudo` to create `STATE_DIR` outside
-your home.
+`make` only works with the source tree: it builds and installs, nothing else.
+After `make install`, the operator drives the server with the installed
+`lanpull` binary, and the configuration is created by the binary itself:
+
+```bash
+sudo lanpull init            # create /etc/lanpull/lanpull.conf (prompts)
+```
+
+`lanpull init` derives `SERVER_IP` from the main routing table, so it ignores
+proxy/tunnel addresses and never names an interface. Because the target is the
+canonical `/etc/lanpull/lanpull.conf`, it must run as root; it sets
+`/etc/lanpull` to `root:<operator-group>` mode `0770` and the file to
+`root:<operator-group>` mode `0640`, so the service can read it and the operator
+can manage accounts and policy without `sudo`. All other commands run as the
+installing user, not with `sudo`. The canonical layout is:
+
+```text
+/usr/local/bin/lanpull                  the binary
+/etc/lanpull/                           root:<operator-group>, mode 0770
+  lanpull.conf                          configuration (root:group, 0640)
+  lanpull.clients                       accounts (operator-owned, 0600)
+  lanpull.access.json                   access policy (operator-owned, 0600)
+/var/lib/lanpull/                       state, owned by the operator
+/etc/systemd/system/lanpull.service     unit (reads /etc/lanpull/lanpull.conf)
+```
+
+Continue with the binary:
+
+```bash
+lanpull cert                 # self-signed certificate (SAN = IP:<server-ip>)
+lanpull share list           # show configured shares
+lanpull access public add <share>:**   # grant a path to every account
+lanpull share rescan         # build the manifests
+lanpull service start        # start the unit (no autostart on boot)
+```
 
 The order matters: the certificate must exist before clients are registered
 (it is included in the staged client folder), and a manifest must exist before
 the first pull. The server refuses to start without accounts and a certificate.
+
+### Command-line contract
+
+Every command follows the same conventions:
+
+- result data goes to **stdout**, diagnostics and prompts to **stderr**;
+- `--json` prints one envelope on stdout instead of text:
+  `{"status":"ok","command":"<path>","data":…,"warnings":[…]}` on success,
+  `{"status":"error","command":…,"code":…,"message":…,"hint":…}` on failure;
+- the configuration path resolves from `--config`, then `$LANPULL_CONFIG`, then
+  the canonical `/etc/lanpull/lanpull.conf`, so no flag is needed in normal use;
+- global flags: `--config <path>`, `--json`, `-v/--verbose`, `-q/--quiet`;
+- `--yes` skips a confirmation, `--force` overwrites an existing target, and
+  `--dry-run` reports what a mutation would change without writing it;
+- exit codes: `0` success, `1` failure, `2` usage, `3` not initialized,
+  `4` denied, `5` busy.
+
+Run `lanpull --help` or `lanpull <command> --help` for the full tree.
 
 ### Register a client (once per machine)
 
@@ -159,24 +203,21 @@ lanpull access public add <share>:<path>
 lanpull access client add <client-name> <share>:<path>
 
 # create the account and stage a ready-to-copy folder
-lanpull add-client <client-name> [--ip <client-ip>] --output <output-dir>
+lanpull account add <client-name> [--ip <client-ip>] --output <output-dir>
+
+# copy the staged folder to the client machine
+lanpull account export <client-name> --to <dir>
 ```
 
-`add-client` generates a random password, stores only its argon2 hash in
-`config/lanpull.clients`, and stages a folder (`pull.py`, `lanpull.conf`,
+`account add` generates a random password, stores only its argon2 hash in
+`/etc/lanpull/lanpull.clients`, and stages a folder (`pull.py`, `lanpull.conf`,
 `auth`, `server.crt`) with one `MIRROR_<share>` line per share the account can
-see. Copy that folder to the client machine into a single directory of your
-choice — for example `~/lanpull/`. Omitting `--ip` leaves the account usable
-from any address on the LAN. Changing the scope later is a `lanpull access`
-command; the operator no longer edits rules per client.
-
-The `make` wrapper forwards an argument string:
-
-```bash
-make access ARGS='public add <share>:<path>'
-make access ARGS='client add <client-name> <share>:<path>'
-make access ARGS='client list'
-```
+see. `account export` copies that folder to `<dir>` (or into `<dir>/<name>` when
+`<dir>` already exists; `--force` overwrites, `--move` moves the staging copy).
+Copy it to the client machine into a single directory of your choice — for
+example `~/lanpull/`. Omitting `--ip` leaves the account usable from any address
+on the LAN. Changing the scope later is a `lanpull access` command; the operator
+never edits rules per client.
 
 ### Client
 
@@ -195,8 +236,8 @@ The removal levels are cumulative, and the destructive ones require `CONFIRM=1`:
 
 ```bash
 make clean                      # build artifacts and caches only (no root)
-make distclean CONFIRM=1        # clean + config/lanpull.{conf,clients} + access.json
-make uninstall CONFIRM=1        # binary, systemd unit, and $STATE_DIR
+make distclean CONFIRM=1        # clean + the development config/lanpull.{conf,clients} + access.json
+make uninstall CONFIRM=1        # binary, systemd unit, /etc/lanpull, and $STATE_DIR
 make uninstall CONFIRM=1 SHARE=1   # also removes every share directory
 make wipe CONFIRM=1             # distclean + uninstall: everything lanpull created
 make wipe CONFIRM=1 SHARE=1     # ...including the distributed files
@@ -205,9 +246,12 @@ make wipe CONFIRM=1 SHARE=1     # ...including the distributed files
 Each target escalates only the steps that need root, so no `sudo` prefix is
 required on the command line; run them without `sudo`.
 
-`uninstall` removes `$STATE_DIR` (manifest, TLS material, arm state, audit log,
-staged bundle); `SHARE=1` additionally removes the distributed files, so use it
-only when the share holds nothing you need.
+`distclean` removes only the repository-local development configuration.
+`uninstall` removes the installed artifacts: the binary, the unit, the whole
+`/etc/lanpull` directory (configuration, accounts, policy), and `$STATE_DIR`
+(manifest, TLS material, arm state, audit log, staged bundle); `SHARE=1`
+additionally removes the distributed files, so use it only when the share holds
+nothing you need.
 
 Together these targets erase every artifact lanpull itself created on the
 server, at any stage after the service has been stopped. The gate tools that
@@ -238,7 +282,7 @@ folder are never touched.
 
 ## Configuration
 
-### Server — `config/lanpull.conf`
+### Server — `/etc/lanpull/lanpull.conf`
 
 | Key | Meaning | Example |
 | --- | --- | --- |
@@ -257,7 +301,7 @@ The real file is mode 600 and is never committed. Blank lines and `#` comments
 are ignored, values may be quoted, and `$NAME`/`${NAME}` environment
 references are expanded. At least one `SHARE_<name>` key is required.
 
-### Accounts — `config/lanpull.clients`
+### Accounts — `/etc/lanpull/lanpull.clients`
 
 One line per machine:
 
@@ -267,15 +311,15 @@ One line per machine:
 
 The optional third field binds the account to a source IP; omit it (or use
 `*`) to accept any address on the LAN. The `local` field marks a self-share
-account, exempt from the arming window. Managed with `make add-client`,
-`make remove-client`, and `make passwd`; never committed.
+account, exempt from the arming window. Managed with `lanpull account add`,
+`lanpull account remove`, and `lanpull account passwd`; never committed.
 
 Pick `<client-name>` as a meaningful label for the machine or transfer
 direction (for example `pc-to-laptop`); it is the account identity and the key
 of the access policy. The client hostname (`X-Lanpull-Host`) is self-reported,
 shown by `lanpull report`, and never grants access.
 
-### Access policy — `config/lanpull.access.json`
+### Access policy — `/etc/lanpull/lanpull.access.json`
 
 One JSON object; never committed and mode 600:
 
@@ -335,7 +379,7 @@ MIRROR_media=<other-output-dir>
 `<server-ip>`, `127.0.0.1`, and `localhost`).
 
 Each `MIRROR_<share>` maps a share to a local mirror directory; the operator
-chooses the base with `make add-client … OUTPUT=<output-dir>`, and the staged
+chooses the base with `lanpull account add … --output <output-dir>`, and the staged
 file maps each granted share to a subdirectory. A positional argument selects a
 single share:
 
@@ -355,9 +399,9 @@ Two clients, one file everyone gets, one file only for `client-01`. The share
 
 ```bash
 # --- one-time server setup ---
-make build && make install
-# config/lanpull.conf: SHARE_cube=<share-dir>, ACCESS_PATH=lanpull.access.json
-make cert
+make setup && make build && make install
+sudo lanpull init                          # create /etc/lanpull/lanpull.conf
+lanpull cert                               # SAN includes <server-ip> and loopback
 
 # --- access policy ---
 lanpull access public add cube:sub/common.pdf
@@ -366,15 +410,15 @@ lanpull access client list                 # client-01 sees both; others see com
 lanpull access doctor
 
 # --- accounts + staged folders ---
-lanpull add-client client-01 --ip <client-ip> --output <output-dir>
-lanpull add-client client-02 --output <output-dir>
+lanpull account add client-01 --ip <client-ip> --output <output-dir>
+lanpull account add client-02 --output <output-dir>
 
 # --- manifests + serve ---
-lanpull access apply                       # or: make rescan
-make up
+lanpull share rescan                       # or: lanpull access apply
+lanpull service start
 
 # --- round: arm on the server, pull on each client ---
-lanpull arm --all --ttl 15m
+lanpull account arm --all --ttl 15m
 # on each client, from ~/lanpull/
 ./pull.py --check
 ./pull.py                                  # client-02 never sees sub/target.pdf
@@ -466,13 +510,13 @@ and no git hook**; the gates are run deliberately with `make ci`.
 
 | Symptom | Cause and fix |
 | --- | --- |
-| `ERROR: account <name> is not armed (401)` | Run `lanpull arm <name> --ttl 15m` on the server, then retry. |
+| `ERROR: account <name> is not armed (401)` | Run `lanpull account arm <name> --ttl 15m` on the server, then retry. |
 | `ERROR: account <name> is not allowed from this address (401)` | The account is IP-bound and the machine is not at its registered address. Update `allowed_ip` or re-add the account without `IP`. |
 | `ERROR: server certificate does not match server.crt` | Copy the current `server.crt` to the client. The client never falls back to an unverified connection. |
-| `ERROR: server has no manifest; ask the operator to run make rescan` | Run `make rescan` on the server. |
+| `ERROR: server has no manifest; ask the operator to run 'lanpull share rescan'` | Run `lanpull share rescan` on the server. |
 | Stale files are not removed | Deletion is limited to files lanpull delivered earlier; answer the prompt or use `--delete`. |
 | `ERROR: another pull is already running` | A second pull for the same destination was refused by the lock file. |
-| `make status` warns the manifest is stale | Files in the share are newer than the manifest; run `make rescan`. |
+| `lanpull status` warns the manifest is stale | Files in the share are newer than the manifest; run `lanpull share rescan`. |
 
 ## License
 
