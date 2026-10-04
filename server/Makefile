@@ -2,14 +2,16 @@
 # Thin dispatcher: one target per operation. Non-trivial, privileged, or
 # destructive logic lives in scripts/ and is invoked from one-line recipes.
 #
+# This Makefile only works with the source tree: it builds the binary, installs
+# it, and runs the quality gates. It never generates a configuration. After
+# `make install`, the operator drives the server with the installed `lanpull`
+# binary (see the `lanpull --help` tree); the configuration is created by
+# `sudo lanpull init`.
+#
 # The Makefile locates the Rust toolchain itself ($CARGO_HOME/bin), so the
 # documented commands work without editing PATH first.
 
 SHELL := /bin/sh
-
-LANPULL_CONF ?= ../config/lanpull.conf
-LANPULL_CONF_ABS := $(abspath $(LANPULL_CONF))
--include $(LANPULL_CONF)
 
 # --- Toolchain (self-locating) -------------------------------------------
 CARGO_HOME  ?= $(HOME)/.cargo
@@ -26,33 +28,30 @@ BIN_DIR        ?= /usr/local/bin
 LANPULL        ?= $(BIN_DIR)/lanpull
 SERVICE        ?= lanpull.service
 UNIT           ?= /etc/systemd/system/$(SERVICE)
+CONFIG_DIR     ?= /etc/lanpull
+SYSTEM_CONF    := $(CONFIG_DIR)/lanpull.conf
 OPERATOR       ?= $(if $(SUDO_USER),$(SUDO_USER),$(shell id -un))
 OPERATOR_GROUP ?= $(shell id -gn $(OPERATOR) 2>/dev/null || id -gn)
-LANPULL_CLIENTS ?= ../config/lanpull.clients
-LANPULL_ACCESS  ?= ../config/lanpull.access.json
 CLIENT_DIR     ?= ../client
 STATE_DIR      ?= /var/lib/lanpull
 STATE_DIR_ABS  := $(abspath $(STATE_DIR))
-SHARES_FILE    ?= $(LANPULL_CONF_ABS).shares
+# Materialized before a teardown so `SHARE=1` removes the right directories.
+# Kept outside /etc/lanpull: a user-driven teardown cannot write there.
+SHARES_FILE    ?= $(CURDIR)/.lanpull.shares
 
 CONFIRM ?=
 SHARE   ?=
 
 SCRIPTS := scripts
-CONFIG_ARGS ?=
 CRATE_DIR := crates
 CRATES    := core store http cli
 
-# The share list is materialized before any removal, because `wipe` deletes the
-# configuration (and so the share definitions) before `uninstall` runs.
 UNINSTALL_CMD = $(SCRIPTS)/uninstall.sh --binary "$(LANPULL)" --unit "$(UNIT)" \
-	--state-dir "$(STATE_DIR_ABS)" --shares-file "$(SHARES_FILE)" \
-	--share "$(SHARE)" --service "$(SERVICE)"
+	--state-dir "$(STATE_DIR_ABS)" --conf-dir "$(CONFIG_DIR)" \
+	--shares-file "$(SHARES_FILE)" --share "$(SHARE)" --service "$(SERVICE)"
 
-.PHONY: help setup build config client-bundle install uninstall wipe \
-        up down restart logs status rescan cert \
-        add-client remove-client list-clients access passwd arm disarm report \
-        clean distclean confirm check-tools check-scripts e2e \
+.PHONY: help setup build install uninstall wipe \
+        clean distclean confirm check-tools check-scripts e2e client-bundle \
         fmt fmt-check lint doc test deny audit audit-bin geiger security ci
 
 help: ## Show available targets
@@ -65,80 +64,32 @@ setup: ## Install the Rust target and the quality-gate tools
 build: ## Build the static server binary with embedded dependency metadata
 	$(CARGO) auditable build --release --locked --target $(TARGET)
 
-config: ## Generate config/lanpull.conf for this machine
-	$(SCRIPTS)/init-config.sh --config $(LANPULL_CONF_ABS) $(CONFIG_ARGS)
-
 client-bundle: ## Stage client/ into $STATE_DIR/client
 	install -Dm755 $(CLIENT_DIR)/pull.py $(STATE_DIR)/client/pull.py
 	install -Dm644 $(CLIENT_DIR)/VERSION $(STATE_DIR)/client/VERSION
 
-install: build ## Install the binary, unit, and client bundle (escalates as needed)
+install: build ## Install the binary, unit, config dir, and client bundle
 	$(SCRIPTS)/install.sh \
 		--binary "$(BINARY)" --bin-dir "$(BIN_DIR)" \
 		--unit-src "$(abspath ../systemd/lanpull.service)" --unit-dest "$(UNIT)" \
 		--state-dir "$(STATE_DIR_ABS)" --operator "$(OPERATOR)" \
-		--group "$(OPERATOR_GROUP)" --conf "$(LANPULL_CONF_ABS)" \
+		--group "$(OPERATOR_GROUP)" --conf-dir "$(CONFIG_DIR)" \
 		--client-dir "$(CLIENT_DIR)"
 
-uninstall: confirm ## Remove the binary, unit, and state (CONFIRM=1, SHARE=1)
+uninstall: confirm ## Remove the binary, unit, /etc/lanpull, and state (CONFIRM=1, SHARE=1)
 	@if [ "$(SHARE)" = "1" ]; then \
-		$(SCRIPTS)/shares.sh "$(LANPULL_CONF_ABS)" >"$(SHARES_FILE)" || exit 1; \
+		$(SCRIPTS)/shares.sh "$(SYSTEM_CONF)" >"$(SHARES_FILE)" || exit 1; \
 	fi
 	$(UNINSTALL_CMD)
 	@rm -f "$(SHARES_FILE)"
 
 wipe: confirm ## Remove everything lanpull created (CONFIRM=1, SHARE=1)
 	@if [ "$(SHARE)" = "1" ]; then \
-		$(SCRIPTS)/shares.sh "$(LANPULL_CONF_ABS)" >"$(SHARES_FILE)" || exit 1; \
+		$(SCRIPTS)/shares.sh "$(SYSTEM_CONF)" >"$(SHARES_FILE)" || exit 1; \
 	fi
 	$(MAKE) distclean CONFIRM=1
 	$(UNINSTALL_CMD)
 	@rm -f "$(SHARES_FILE)"
-
-up: ## Start the service (no autostart)
-	$(SCRIPTS)/service.sh start $(SERVICE)
-
-down: ## Stop the service
-	$(SCRIPTS)/service.sh stop $(SERVICE)
-
-restart: ## Restart the service
-	$(SCRIPTS)/service.sh restart $(SERVICE)
-
-logs: ## Follow the service log
-	$(SCRIPTS)/service.sh logs $(SERVICE)
-
-status: ## Warn on a stale manifest and show armed clients
-	$(LANPULL) status --config $(LANPULL_CONF_ABS)
-
-rescan: ## Regenerate the manifest
-	$(LANPULL) manifest --config $(LANPULL_CONF_ABS)
-
-cert: ## Generate the self-signed TLS certificate
-	$(LANPULL) cert --config $(LANPULL_CONF_ABS)
-
-add-client: ## Create an account: make add-client NAME=<client-name> [IP=<client-ip>] OUTPUT=<output-dir>
-	$(LANPULL) add-client $(NAME) $(if $(IP),--ip $(IP),) --output $(OUTPUT) --config $(LANPULL_CONF_ABS)
-
-remove-client: ## Revoke an account: make remove-client NAME=<client-name>
-	$(LANPULL) remove-client $(NAME) --config $(LANPULL_CONF_ABS)
-
-list-clients: ## List accounts, IPs, and effective access rules
-	$(LANPULL) list-clients --config $(LANPULL_CONF_ABS)
-
-access: ## Access policy: make access ARGS='client list'
-	$(LANPULL) access $(ARGS) --config $(LANPULL_CONF_ABS)
-
-passwd: ## Rotate a password: make passwd NAME=<client-name>
-	$(LANPULL) passwd $(NAME) --config $(LANPULL_CONF_ABS)
-
-arm: ## Arm an account: make arm NAME=<client-name> TTL=15m
-	$(LANPULL) arm $(NAME) --ttl $(TTL) --config $(LANPULL_CONF_ABS)
-
-disarm: ## Clear an arm window: make disarm NAME=<client-name>
-	$(LANPULL) disarm $(NAME) --config $(LANPULL_CONF_ABS)
-
-report: ## Show who pulled what
-	$(LANPULL) report --config $(LANPULL_CONF_ABS)
 
 clean: ## Remove build artifacts and caches (no root)
 	$(CARGO) clean
@@ -151,9 +102,8 @@ confirm: ## Refuse a destructive target unless CONFIRM=1 is given
 		exit 1; \
 	fi
 
-distclean: confirm ## Remove build artifacts, generated config, policy, and accounts (CONFIRM=1)
+distclean: confirm ## Remove build artifacts and repository runtime leftovers (CONFIRM=1)
 	$(MAKE) clean
-	rm -f $(LANPULL_CONF) $(LANPULL_CLIENTS) $(LANPULL_ACCESS)
 	$(SCRIPTS)/distclean.sh ..
 
 check-tools: ## Fail early when a gate tool is missing (run make setup)

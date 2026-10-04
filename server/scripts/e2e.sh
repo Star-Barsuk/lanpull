@@ -48,7 +48,7 @@ printf 'nested\n' >"$share/sub/b.txt"
 
 # STATE_DIR already exists, so init never escalates.
 "$binary" init --config "$conf" --share "default=$share" --state-dir "$state" \
-    --server-ip 127.0.0.1 --non-interactive >/dev/null
+    --server-ip 127.0.0.1 --yes >/dev/null
 port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
 sed -i "s/^PORT=.*/PORT=$port/" "$conf"
 
