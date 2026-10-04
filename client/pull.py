@@ -257,9 +257,8 @@ def auth_failure_message(response: http.client.HTTPResponse, credentials: str) -
     user = credentials.split(":", 1)[0]
     reason = response.getheader("X-Lanpull-Reason", "")
     if reason == "not_armed":
-        return (
-            f"ERROR: account {user} is not armed (401); ask the operator to run lanpull arm {user}"
-        )
+        hint = f"ask the operator to run 'lanpull account arm {user}'"
+        return f"ERROR: account {user} is not armed (401); {hint}"
     if reason == "foreign_ip":
         return f"ERROR: account {user} is not allowed from this address (401)"
     if reason == "rate_limited":
@@ -640,7 +639,7 @@ def run_share(
     with Lock(output / LOCK_NAME):
         data = client.get_json(
             manifest_path(share),
-            "server has no manifest; ask the operator to run make rescan",
+            "server has no manifest; ask the operator to run 'lanpull share rescan'",
         )
         generated_at = data.get("generated_at")
         _scheme, entries = parse_manifest(data)
