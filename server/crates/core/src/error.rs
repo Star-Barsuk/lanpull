@@ -6,12 +6,45 @@ use std::path::PathBuf;
 /// Convenient result alias for lanpull operations.
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Process exit codes used by the `lanpull` binary.
+///
+/// The contract is documented in `docs/SPEC.md`:
+/// - `0` success;
+/// - `1` an operational failure;
+/// - `2` a usage error (also produced by `clap`);
+/// - `3` not initialized (missing configuration or state);
+/// - `4` denied by access policy or account state;
+/// - `5` busy (a lock or an already-running operation).
+pub mod exit {
+    /// Success.
+    pub const OK: u8 = 0;
+    /// Generic operational failure.
+    pub const FAILURE: u8 = 1;
+    /// Usage error (mirrors `clap`'s own exit code).
+    pub const USAGE: u8 = 2;
+    /// The server is not initialized (no configuration or state).
+    pub const NOT_INITIALIZED: u8 = 3;
+    /// Denied by the access policy or account state.
+    pub const DENIED: u8 = 4;
+    /// Busy: a lock is held or an operation is already running.
+    pub const BUSY: u8 = 5;
+}
+
 /// Every error the server can report.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// The configuration file is missing, unreadable, or invalid.
     #[error("configuration error: {0}")]
     Config(String),
+    /// The server has not been initialized: a required file is absent.
+    #[error("not initialized: {0}")]
+    NotInitialized(String),
+    /// The access policy or account state denied the request.
+    #[error("denied: {0}")]
+    Denied(String),
+    /// A lock is held or the operation is already running.
+    #[error("busy: {0}")]
+    Busy(String),
     /// A filesystem or I/O operation failed.
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
@@ -47,4 +80,54 @@ pub enum Error {
         /// Why the path was rejected.
         reason: String,
     },
+}
+
+impl Error {
+    /// The process exit code that corresponds to this error.
+    pub const fn exit_code(&self) -> u8 {
+        match self {
+            Self::NotInitialized(_) => exit::NOT_INITIALIZED,
+            Self::Denied(_) => exit::DENIED,
+            Self::Busy(_) => exit::BUSY,
+            _ => exit::FAILURE,
+        }
+    }
+
+    /// An actionable hint to print after the error, when one helps.
+    pub const fn hint(&self) -> Option<&'static str> {
+        match self {
+            Self::NotInitialized(_) => {
+                Some("run 'sudo lanpull init' to create the configuration and state")
+            }
+            Self::Config(_) => Some("check the configuration; run 'sudo lanpull init' if absent"),
+            Self::Certificate(_) => Some("run 'lanpull cert' to generate the certificate"),
+            Self::Denied(_) => Some("grant access with 'sudo lanpull access ...'"),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Tests may use bare asserts for brevity; production code may not.
+    #![allow(clippy::missing_assert_message)]
+
+    use super::*;
+
+    #[test]
+    fn exit_codes_follow_the_contract() {
+        assert_eq!(Error::Config("x".into()).exit_code(), exit::FAILURE);
+        assert_eq!(
+            Error::NotInitialized("x".into()).exit_code(),
+            exit::NOT_INITIALIZED
+        );
+        assert_eq!(Error::Denied("x".into()).exit_code(), exit::DENIED);
+        assert_eq!(Error::Busy("x".into()).exit_code(), exit::BUSY);
+    }
+
+    #[test]
+    fn not_initialized_has_a_hint() {
+        assert!(Error::NotInitialized("x".into()).hint().is_some());
+        assert!(Error::Io(io::Error::other("x")).hint().is_none());
+    }
 }

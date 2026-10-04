@@ -94,6 +94,137 @@ pub fn create(
     Ok(Created { staging })
 }
 
+/// The result of a successful export.
+#[derive(Debug)]
+pub struct Exported {
+    /// Directory the client folder was copied to.
+    pub destination: PathBuf,
+    /// Whether the destination is on a different filesystem than the staging.
+    pub cross_device: bool,
+}
+
+/// Copy an account's staged client folder to `destination` (or
+/// `destination/<name>` when `destination` is an existing directory).
+///
+/// The staging directory stays in place unless `move_staging` is set, so the
+/// operator can export the same account again. An existing non-empty target is
+/// refused unless `force` is set.
+pub fn export(
+    config: &Config,
+    name: &str,
+    destination: &Path,
+    move_staging: bool,
+    force: bool,
+) -> Result<Exported> {
+    let accounts = Clients::load(&config.clients_path)?;
+    if accounts.get(name).is_none() {
+        return Err(Error::Account(format!("no such account: {name}")));
+    }
+
+    let staging = config.state_dir.join("client-ready").join(name);
+    if !staging.is_dir() {
+        return Err(Error::Account(format!(
+            "no staged folder for {name}; run 'lanpull account passwd {name}' or recreate it"
+        )));
+    }
+    if !staging.join("auth").is_file() {
+        return Err(Error::Account(format!(
+            "staged folder for {name} has no auth file; run 'lanpull account passwd {name}'"
+        )));
+    }
+
+    // A path that is an existing directory means "put the folder inside it".
+    let target = if destination.is_dir() {
+        destination.join(name)
+    } else {
+        destination.to_path_buf()
+    };
+
+    if target.exists() && !force {
+        let empty = target.is_dir()
+            && std::fs::read_dir(&target).is_ok_and(|mut entries| entries.next().is_none());
+        if !empty {
+            return Err(Error::Account(format!(
+                "destination {} exists; pass --force to overwrite",
+                target.display()
+            )));
+        }
+    }
+
+    let cross_device = crosses_device(&staging, &target);
+
+    copy_tree(&staging, &target, force)?;
+    apply_modes(&target)?;
+
+    if move_staging {
+        std::fs::remove_dir_all(&staging)?;
+    }
+
+    Ok(Exported {
+        destination: target,
+        cross_device,
+    })
+}
+
+/// Compare the device of two paths, walking up to the nearest existing parent.
+fn crosses_device(from: &Path, to: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    let device = |path: &Path| -> Option<u64> {
+        let mut current = path;
+        loop {
+            if let Ok(meta) = std::fs::metadata(current) {
+                return Some(meta.dev());
+            }
+            current = current.parent()?;
+        }
+    };
+    match (device(from), device(to)) {
+        (Some(a), Some(b)) => a != b,
+        _ => false,
+    }
+}
+
+/// Recursively copy `source` into `target`.
+fn copy_tree(source: &Path, target: &Path, force: bool) -> Result<()> {
+    std::fs::create_dir_all(target)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = target.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_tree(&from, &to, force)?;
+        } else if to.exists() && !force {
+            return Err(Error::Account(format!(
+                "destination file {} exists; pass --force to overwrite",
+                to.display()
+            )));
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// Fix the expected modes of a staged client folder.
+fn apply_modes(dir: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let set = |path: &Path, mode: u32| -> Result<()> {
+        if path.exists() {
+            let mut permissions = std::fs::metadata(path)?.permissions();
+            permissions.set_mode(mode);
+            std::fs::set_permissions(path, permissions)?;
+        }
+        Ok(())
+    };
+    set(dir, 0o700)?;
+    set(&dir.join("pull.py"), 0o755)?;
+    set(&dir.join("auth"), 0o600)?;
+    set(&dir.join("server.crt"), 0o644)?;
+    set(&dir.join("lanpull.conf"), 0o644)?;
+    Ok(())
+}
+
 /// Write the staged client folder for a freshly created account.
 fn stage(
     config: &Config,

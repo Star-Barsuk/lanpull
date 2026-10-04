@@ -16,6 +16,12 @@ use crate::error::{Error, Result};
 
 /// The default state directory.
 pub const DEFAULT_STATE_DIR: &str = "/var/lib/lanpull";
+/// The canonical configuration directory, outside the repository.
+pub const DEFAULT_CONFIG_DIR: &str = "/etc/lanpull";
+/// The canonical configuration file path.
+pub const DEFAULT_CONFIG_PATH: &str = "/etc/lanpull/lanpull.conf";
+/// The environment variable that overrides the configuration path.
+pub const CONFIG_ENV: &str = "LANPULL_CONFIG";
 /// The default listen address.
 pub const DEFAULT_BIND: &str = "0.0.0.0";
 /// The default listen port.
@@ -64,6 +70,46 @@ pub struct Config {
     pub audit_log: PathBuf,
 }
 
+/// Resolve the configuration path from an explicit flag and the environment.
+///
+/// A path passed explicitly (or in `$LANPULL_CONFIG`) must exist: a typo in an
+/// explicit path is an error, not a fallback. Only when neither is set does the
+/// function probe the canonical location and then the in-repo development path.
+pub fn resolve_path(explicit: Option<&Path>) -> Result<PathBuf> {
+    if let Some(path) = explicit {
+        if path.is_file() {
+            return Ok(path.to_path_buf());
+        }
+        return Err(Error::NotInitialized(format!(
+            "configuration not found at {}",
+            path.display()
+        )));
+    }
+    if let Some(path) = std::env::var_os(CONFIG_ENV) {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Ok(path);
+        }
+        return Err(Error::NotInitialized(format!(
+            "configuration not found at {} (from ${CONFIG_ENV})",
+            path.display()
+        )));
+    }
+    let canonical = PathBuf::from(DEFAULT_CONFIG_PATH);
+    if canonical.is_file() {
+        return Ok(canonical);
+    }
+    let development = PathBuf::from("config/lanpull.conf");
+    if development.is_file() {
+        return Ok(development);
+    }
+    Err(Error::NotInitialized(format!(
+        "no configuration found; checked {} and {}",
+        canonical.display(),
+        development.display()
+    )))
+}
+
 impl Config {
     /// Load and validate a configuration file.
     ///
@@ -71,8 +117,13 @@ impl Config {
     /// configuration file, so a config in `config/` can reference a sibling
     /// `lanpull.clients` file by name.
     pub fn load(path: &Path) -> Result<Self> {
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| Error::Config(format!("cannot read {}: {e}", path.display())))?;
+        let text = std::fs::read_to_string(path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Error::NotInitialized(format!("configuration not found at {}", path.display()))
+            } else {
+                Error::Config(format!("cannot read {}: {e}", path.display()))
+            }
+        })?;
         let map = parse_kv(&text);
         let base = path.parent().unwrap_or_else(|| Path::new("."));
         let config = Self::from_map(&map)?.resolve(base);
@@ -451,6 +502,19 @@ mod tests {
         )
         .unwrap();
         assert!(Config::load(&conf).is_ok());
+    }
+
+    #[test]
+    fn resolve_path_prefers_explicit_and_errors_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let conf = dir.path().join("lanpull.conf");
+        std::fs::write(&conf, "SHARE_reports=/srv/r\nSERVER_IP=127.0.0.1\n").unwrap();
+
+        assert_eq!(resolve_path(Some(&conf)).unwrap(), conf);
+
+        let missing = dir.path().join("absent.conf");
+        let err = resolve_path(Some(&missing)).unwrap_err();
+        assert!(matches!(err, Error::NotInitialized(_)), "got {err}");
     }
 
     #[test]

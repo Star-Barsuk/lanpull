@@ -62,7 +62,7 @@ pub fn append(path: &Path, record: &Record) -> Result<()> {
 }
 
 /// Per-account aggregate of the audit log.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct AccountSummary {
     /// Account name.
     pub user: String,
@@ -79,7 +79,7 @@ pub struct AccountSummary {
 }
 
 /// The whole audit report.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Report {
     /// Aggregates, one per account, sorted by name.
     pub accounts: Vec<AccountSummary>,

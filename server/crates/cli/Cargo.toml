@@ -24,6 +24,8 @@ lanpull-core = { path = "../core", version = "0.1.0" }
 lanpull-store = { path = "../store", version = "0.1.0" }
 lanpull-http = { path = "../http", version = "0.1.0" }
 clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

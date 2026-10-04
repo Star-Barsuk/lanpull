@@ -42,27 +42,27 @@ share="$tmp/share"
 state="$tmp/state"
 conf="$tmp/lanpull.conf"
 client="$tmp/client"
-mkdir -p "$share/sub" "$state" "$client"
+mkdir -p "$share/sub" "$state"
 printf 'hello\n' >"$share/a.txt"
 printf 'nested\n' >"$share/sub/b.txt"
 
-# STATE_DIR already exists, so init-config never escalates.
-"$script_dir/init-config.sh" --config "$conf" --share "$share" --state "$state" \
+# STATE_DIR already exists, so init never escalates.
+"$binary" init --config "$conf" --share "default=$share" --state-dir "$state" \
     --server-ip 127.0.0.1 --non-interactive >/dev/null
 port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
 sed -i "s/^PORT=.*/PORT=$port/" "$conf"
 
 "$binary" cert --config "$conf" >/dev/null
 "$binary" access public add 'default:**' --config "$conf" >/dev/null
-"$binary" manifest --config "$conf" >/dev/null
+"$binary" share rescan --config "$conf" >/dev/null
 
 install -Dm755 "$client_dir/pull.py" "$state/client/pull.py"
 install -Dm644 "$client_dir/VERSION" "$state/client/VERSION"
-"$binary" add-client e2e --output "$tmp/mirror" --config "$conf" >/dev/null
-cp -r "$state/client-ready/e2e/." "$client/"
+"$binary" account add e2e --output "$tmp/mirror" --config "$conf" >/dev/null
+"$binary" account export e2e --to "$client" --config "$conf" >/dev/null
 chmod 700 "$client"
 chmod 600 "$client/auth"
-"$binary" arm e2e --ttl 15m --config "$conf" >/dev/null
+"$binary" account arm e2e --ttl 15m --config "$conf" >/dev/null
 
 "$binary" serve --config "$conf" >"$tmp/serve.log" 2>&1 &
 serve_pid=$!
@@ -90,7 +90,7 @@ fi
 # Second round: a modified and a new file are picked up after rescan.
 printf 'updated\n' >"$share/a.txt"
 printf 'new\n' >"$share/c.txt"
-"$binary" manifest --config "$conf" >/dev/null
+"$binary" share rescan --config "$conf" >/dev/null
 "$client/pull.py" >/dev/null
 grep -q 'updated' "$tmp/mirror/default/a.txt" || die "e2e: a.txt not updated"
 [ -f "$tmp/mirror/default/c.txt" ] || die "e2e: c.txt not delivered"
@@ -98,7 +98,7 @@ grep -q 'updated' "$tmp/mirror/default/a.txt" || die "e2e: a.txt not updated"
 
 # Third round: a file removed on the server is deleted with --delete.
 rm -f "$share/a.txt"
-"$binary" manifest --config "$conf" >/dev/null
+"$binary" share rescan --config "$conf" >/dev/null
 "$client/pull.py" --delete >/dev/null
 [ ! -e "$tmp/mirror/default/a.txt" ] || die "e2e: stale a.txt not deleted"
 
