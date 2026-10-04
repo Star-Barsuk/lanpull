@@ -15,6 +15,7 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 binary=""
 unit=""
 state_dir=""
+conf_dir=""
 shares_file=""
 share="0"
 service="lanpull.service"
@@ -24,6 +25,7 @@ while [ "$#" -gt 0 ]; do
         --binary) binary=$2; shift 2 ;;
         --unit) unit=$2; shift 2 ;;
         --state-dir) state_dir=$2; shift 2 ;;
+        --conf-dir) conf_dir=$2; shift 2 ;;
         --shares-file) shares_file=$2; shift 2 ;;
         --share) share=$2; shift 2 ;;
         --service) service=$2; shift 2 ;;
@@ -34,6 +36,9 @@ done
 [ -n "$unit" ] || die "uninstall: --unit is required"
 [ -n "$state_dir" ] || die "uninstall: --state-dir is required"
 require_safe_path "$state_dir" STATE_DIR
+if [ -n "$conf_dir" ]; then
+    require_safe_path "$conf_dir" CONFIG_DIR
+fi
 
 # Stop and disable the unit; tolerate an absent unit.
 run_root systemctl stop "$service" 2>/dev/null || true
@@ -47,6 +52,11 @@ fi
 
 run_root rm -rf "$state_dir"
 echo "removed: $state_dir"
+
+if [ -n "$conf_dir" ] && [ -d "$conf_dir" ]; then
+    run_root rm -rf "$conf_dir"
+    echo "removed: $conf_dir"
+fi
 
 if [ "$share" = "1" ]; then
     [ -n "$shares_file" ] && [ -f "$shares_file" ] \

@@ -20,6 +20,7 @@ state_dir=""
 operator=""
 group=""
 conf=""
+conf_dir=""
 client_dir=""
 
 while [ "$#" -gt 0 ]; do
@@ -32,6 +33,7 @@ while [ "$#" -gt 0 ]; do
         --operator) operator=$2; shift 2 ;;
         --group) group=$2; shift 2 ;;
         --conf) conf=$2; shift 2 ;;
+        --conf-dir) conf_dir=$2; shift 2 ;;
         --client-dir) client_dir=$2; shift 2 ;;
         *) die "install: unknown argument: $1" ;;
     esac
@@ -46,31 +48,47 @@ done
 [ -n "$operator" ] || die "install: --operator is required"
 [ -n "$group" ] || die "install: --group is required"
 [ -n "$conf" ] || die "install: --conf is required"
+[ -n "$conf_dir" ] || die "install: --conf-dir is required"
 [ -n "$client_dir" ] || die "install: --client-dir is required"
 require_safe_path "$state_dir" STATE_DIR
+require_safe_path "$conf_dir" CONFIG_DIR
 
 # 1. State directory, owned by the operator.
 run_root install -d -m700 -o "$operator" -g "$group" "$state_dir"
 
-# 2. Binary.
+# 2. Configuration directory, root-only. The configuration itself is created
+#    by 'sudo lanpull init'; install never overwrites an existing file.
+run_root install -d -m750 -o root -g root "$conf_dir"
+if [ -f "$conf" ]; then
+    # A development config was pointed at explicitly: copy it once, keeping 0600.
+    if [ ! -f "$conf_dir/lanpull.conf" ]; then
+        run_root install -Dm600 -o root -g root "$conf" "$conf_dir/lanpull.conf"
+        echo "installed: $conf_dir/lanpull.conf (from $conf)"
+    else
+        echo "kept:      $conf_dir/lanpull.conf (already present)"
+    fi
+fi
+
+# 3. Binary.
 run_root install -Dm755 "$binary" "$bin_dir/lanpull"
 
-# 3. systemd unit with the placeholders substituted.
+# 4. systemd unit with the placeholders substituted. The unit always reads the
+#    canonical configuration, never the development path.
 tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
 sed -e "s|__LANPULL_USER__|$operator|g" \
     -e "s|__LANPULL_GROUP__|$group|g" \
-    -e "s|__LANPULL_CONF__|$conf|g" \
+    -e "s|__LANPULL_CONF__|$conf_dir/lanpull.conf|g" \
     -e "s|__LANPULL_STATE_DIR__|$state_dir|g" "$unit_src" >"$tmp"
 run_root install -Dm644 "$tmp" "$unit_dest"
 rm -f "$tmp"
 trap - EXIT
 
-# 4. Give the operator ownership of the state directory, then reload systemd.
+# 5. Give the operator ownership of the state directory, then reload systemd.
 run_root chown -R "$operator:$group" "$state_dir"
 run_root systemctl daemon-reload
 
-# 5. Stage the client bundle (the state directory is operator-owned now).
+# 6. Stage the client bundle (the state directory is operator-owned now).
 install -Dm755 "$client_dir/pull.py" "$state_dir/client/pull.py"
 install -Dm644 "$client_dir/VERSION" "$state_dir/client/VERSION"
 
