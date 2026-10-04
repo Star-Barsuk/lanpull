@@ -1,0 +1,29 @@
+# lanpull-cli: the `lanpull` binary. A thin shell over the other crates.
+
+[package]
+name = "lanpull-cli"
+description = "Command-line interface for the lanpull server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "lanpull"
+path = "src/main.rs"
+
+[dependencies]
+lanpull-core = { path = "../core", version = "0.1.0" }
+lanpull-store = { path = "../store", version = "0.1.0" }
+lanpull-http = { path = "../http", version = "0.1.0" }
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

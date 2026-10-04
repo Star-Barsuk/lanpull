@@ -754,18 +754,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "lanpull"
+name = "lanpull-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "lanpull-core",
+ "lanpull-http",
+ "lanpull-store",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "lanpull-core"
 version = "0.1.0"
 dependencies = [
  "argon2",
- "axum",
- "axum-server",
- "base64",
- "clap",
  "hex",
- "http-body-util",
  "humantime",
- "libc",
  "proptest",
  "rand",
  "rcgen",
@@ -775,11 +782,39 @@ dependencies = [
  "tempfile",
  "thiserror",
  "time",
+ "tracing",
+ "walkdir",
+]
+
+[[package]]
+name = "lanpull-http"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-server",
+ "base64",
+ "http-body-util",
+ "lanpull-core",
+ "lanpull-store",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tower",
  "tower-http",
  "tracing",
- "tracing-subscriber",
+]
+
+[[package]]
+name = "lanpull-store"
+version = "0.1.0"
+dependencies = [
+ "lanpull-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
  "walkdir",
 ]
 

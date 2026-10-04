@@ -1,0 +1,35 @@
+# lanpull-core: configuration, policy, accounts, TLS material, and state.
+# No network dependency, so the core is testable in isolation.
+
+[package]
+name = "lanpull-core"
+description = "Configuration, access policy, accounts, and state for lanpull"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+argon2.workspace = true
+hex.workspace = true
+humantime.workspace = true
+rand.workspace = true
+rcgen.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tracing.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+proptest = "1.11.0"
+tempfile = "3.27.0"

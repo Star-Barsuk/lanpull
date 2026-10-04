@@ -13,16 +13,17 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::access::Access;
+use lanpull_core::access::Access;
+use lanpull_core::clients::Clients;
+use lanpull_core::config::Config;
+use lanpull_core::error::{Error, Result};
+use lanpull_core::hash::sha256_file;
+use lanpull_core::policy::Policy;
+use lanpull_core::relpath;
+use lanpull_core::timeutil;
+
 use crate::cache::Cache;
-use crate::clients::Clients;
-use crate::config::Config;
-use crate::error::{Error, Result};
-use crate::hash::sha256_file;
 use crate::ignore::is_ignored;
-use crate::policy::Policy;
-use crate::relpath;
-use crate::timeutil;
 
 /// The only transfer scheme defined so far.
 pub const SCHEME: &str = "whole-file-v1";
@@ -150,7 +151,7 @@ pub fn generate(
         fs::create_dir_all(parent)?;
     }
     let bytes = serde_json::to_vec_pretty(&manifest)?;
-    crate::atomic::write(manifest_path, &bytes)?;
+    lanpull_core::atomic::write(manifest_path, &bytes)?;
     next_cache.save(cache_path)?;
 
     Ok((manifest, warnings))
@@ -244,7 +245,7 @@ pub fn regenerate(config: &Config) -> Result<Regenerated> {
                 fs::create_dir_all(parent)?;
             }
             let bytes = serde_json::to_vec_pretty(&filtered)?;
-            crate::atomic::write(&path, &bytes)?;
+            lanpull_core::atomic::write(&path, &bytes)?;
             expected.insert(path);
         }
         report.account_files.insert(account.name.clone(), visible);

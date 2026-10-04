@@ -11,7 +11,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
+use lanpull_core::error::Result;
 
 /// One cached digest together with the metadata that produced it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,7 +51,7 @@ impl Cache {
             std::fs::create_dir_all(parent)?;
         }
         let bytes = serde_json::to_vec(self)?;
-        crate::atomic::write(path, &bytes)
+        lanpull_core::atomic::write(path, &bytes)
     }
 
     /// Return a cached digest when every metadata field still matches.

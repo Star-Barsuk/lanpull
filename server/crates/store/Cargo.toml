@@ -1,0 +1,27 @@
+# lanpull-store: share walk, manifests, hash cache, and the client bundle.
+# Depends only on lanpull-core, never on the network layer.
+
+[package]
+name = "lanpull-store"
+description = "Share manifests, hash cache, and status checks for lanpull"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lanpull-core = { path = "../core", version = "0.1.0" }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

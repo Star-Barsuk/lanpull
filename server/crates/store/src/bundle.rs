@@ -9,8 +9,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Error, Result};
-use crate::hash::sha256_file;
+use lanpull_core::error::{Error, Result};
+use lanpull_core::hash::sha256_file;
 
 /// One file in the client bundle.
 #[derive(Debug, Clone, Serialize, Deserialize)]

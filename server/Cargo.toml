@@ -1,20 +1,51 @@
-# lanpull server crate.
-# Quality and security policy lives in `[lints.*]` below and in the sibling
-# static-analysis configuration files (rustfmt.toml, clippy.toml, deny.toml,
-# .cargo/audit.toml). `make ci` runs every gate.
+# lanpull Rust workspace.
+# Quality and security policy lives in `[workspace.lints]` below and in the
+# sibling static-analysis configuration files (rustfmt.toml, clippy.toml,
+# deny.toml, .cargo/audit.toml). `make ci` runs every gate.
+#
+# The code is split into four crates so the core can be tested without the
+# network and the CLI stays a thin shell:
+#   lanpull-core   configuration, policy, accounts, TLS, state, error
+#   lanpull-store  share walk, manifests, cache, bundle, status
+#   lanpull-http   the HTTPS server and its request handlers
+#   lanpull-cli    the `lanpull` binary
 
-[package]
-name = "lanpull"
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/store", "crates/http", "crates/cli"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
-description = "Minimal manual file-distribution server for a local network"
 license = "MIT"
 repository = "https://github.com/Star-Barsuk/lanpull"
-readme = "../README.md"
+readme = "../../README.md"
 keywords = ["file-transfer", "https", "lan", "backup"]
 categories = ["command-line-utilities", "network-programming"]
-# No build script: the crate has none.
+
+[workspace.dependencies]
+argon2 = { version = "0.5.3", features = ["std"] }
+axum = "0.8.9"
+axum-server = { version = "0.8.0", features = ["tls-rustls"] }
+base64 = "0.23.1"
+clap = { version = "4.5.61", features = ["derive"] }
+hex = "0.4.3"
+humantime = "2.4.0"
+libc = "0.2.189"
+rand = "0.9"
+rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "pem", "aws_lc_rs"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.10.9"
+thiserror = "2.0.21"
+time = { version = "0.3.44", features = ["formatting", "parsing", "macros"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "signal", "fs", "time", "net", "io-util"] }
+tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.7.1", features = ["fs", "limit", "timeout", "catch-panic", "set-header"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+walkdir = "2.5.0"
 
 [profile.release]
 overflow-checks = true
@@ -22,7 +53,7 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 
-[lints.rust]
+[workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "deny"
 missing_debug_implementations = "warn"
@@ -34,12 +65,12 @@ unused_lifetimes = "deny"
 unused_qualifications = "warn"
 trivial_numeric_casts = "warn"
 
-[lints.rustdoc]
+[workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
 private_intra_doc_links = "warn"
 missing_crate_level_docs = "warn"
 
-[lints.clippy]
+[workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
@@ -69,31 +100,3 @@ similar_names = "allow"
 # Transitive duplicates in third-party dependencies are accepted; cargo-deny
 # still checks duplicates on the actual musl build graph.
 multiple_crate_versions = "allow"
-
-[dependencies]
-argon2 = { version = "0.5.3", features = ["std"] }
-axum = "0.8.9"
-axum-server = { version = "0.8.0", features = ["tls-rustls"] }
-base64 = "0.23.1"
-clap = { version = "4.5.61", features = ["derive"] }
-hex = "0.4.3"
-humantime = "2.4.0"
-libc = "0.2.189"
-rand = "0.9"
-rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "pem", "aws_lc_rs"] }
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
-sha2 = "0.10.9"
-thiserror = "2.0.21"
-time = { version = "0.3.44", features = ["formatting", "parsing", "macros"] }
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "signal", "fs", "time", "net", "io-util"] }
-tower = { version = "0.5.3", features = ["util"] }
-tower-http = { version = "0.7.1", features = ["fs", "limit", "timeout", "catch-panic", "set-header"] }
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-walkdir = "2.5.0"
-
-[dev-dependencies]
-http-body-util = "0.1.5"
-proptest = "1.11.0"
-tempfile = "3.27.0"

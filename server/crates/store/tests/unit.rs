@@ -16,12 +16,125 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use lanpull::access::{Access, Rule};
-use lanpull::{arm::ArmState, audit, bundle, clients, config, manifest, status, timeutil};
+use lanpull_core::access::{Access, Rule};
+use lanpull_core::policy::Policy;
+use lanpull_core::{account, arm::ArmState, audit, clients, config, timeutil};
+use lanpull_store::{bundle, manifest, status};
+
+/// Build a throwaway server config with one `reports` share and a client bundle.
+///
+/// Returns the config and the temporary directory that owns every path.
+fn account_config() -> (config::Config, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let share = dir.path().join("share");
+    let state = dir.path().join("state");
+    fs::create_dir_all(&share).unwrap();
+    fs::create_dir_all(&state).unwrap();
+
+    // A staged client bundle is a precondition for `account::create`.
+    let bundle = state.join("client");
+    fs::create_dir_all(&bundle).unwrap();
+    fs::write(bundle.join("pull.py"), b"print('hi')\n").unwrap();
+    fs::write(bundle.join("VERSION"), b"0.0.0\n").unwrap();
+
+    // A certificate is a precondition for `account::create`.
+    fs::write(state.join("server.crt"), b"cert").unwrap();
+
+    let mut shares = BTreeMap::new();
+    shares.insert("reports".to_string(), share);
+
+    let cfg = config::Config {
+        shares,
+        state_dir: state.clone(),
+        bind: "127.0.0.1".parse().unwrap(),
+        port: 8000,
+        server_ip: "127.0.0.1".parse().unwrap(),
+        cert_path: state.join("server.crt"),
+        key_path: state.join("server.key"),
+        clients_path: dir.path().join("lanpull.clients"),
+        access_path: dir.path().join("lanpull.access.json"),
+        audit_log: state.join("access.log"),
+    };
+    (cfg, dir)
+}
+
+#[test]
+fn account_create_requires_access_and_leaves_no_trace() {
+    let (cfg, _dir) = account_config();
+    let output = cfg.state_dir.join("mirror");
+
+    let err = account::create(&cfg, "client-01", None, &output, false).unwrap_err();
+    assert!(
+        err.to_string().contains("has no access"),
+        "unexpected error: {err}"
+    );
+
+    // The rejected request must not create an account or a staging directory.
+    let accounts = clients::Clients::load(&cfg.clients_path).unwrap();
+    assert!(accounts.get("client-01").is_none());
+    assert!(!cfg.state_dir.join("client-ready/client-01").exists());
+}
+
+#[test]
+fn account_create_stages_folder_and_records_account() {
+    let (cfg, _dir) = account_config();
+
+    let mut policy = Policy::new();
+    policy
+        .share_mut("reports")
+        .unwrap()
+        .public
+        .insert("**".to_string());
+    policy.save(&cfg.access_path).unwrap();
+
+    let output = cfg.state_dir.join("mirror");
+    let created = account::create(&cfg, "client-01", None, &output, false).unwrap();
+
+    let accounts = clients::Clients::load(&cfg.clients_path).unwrap();
+    assert!(accounts.get("client-01").is_some());
+
+    let staging = created.staging;
+    assert!(staging.join("pull.py").is_file());
+    assert!(staging.join("auth").is_file());
+    assert!(staging.join("server.crt").is_file());
+    assert!(staging.join("lanpull.conf").is_file());
+
+    let conf = fs::read_to_string(staging.join("lanpull.conf")).unwrap();
+    assert!(conf.contains("MIRROR_reports="), "conf: {conf}");
+
+    // `auth` is the only sensitive file; it must be mode 0600.
+    let mode = fs::metadata(staging.join("auth"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+}
+
+#[test]
+fn account_create_rejects_duplicate_name() {
+    let (cfg, _dir) = account_config();
+
+    let mut policy = Policy::new();
+    policy
+        .share_mut("reports")
+        .unwrap()
+        .public
+        .insert("**".to_string());
+    policy.save(&cfg.access_path).unwrap();
+
+    let output = cfg.state_dir.join("mirror");
+    account::create(&cfg, "client-01", None, &output, false).unwrap();
+
+    let err = account::create(&cfg, "client-01", None, &output, false).unwrap_err();
+    assert!(
+        err.to_string().contains("already exists"),
+        "unexpected error: {err}"
+    );
+}
 
 #[test]
 fn ignore_patterns_match() {
-    use lanpull::ignore::is_ignored;
+    use lanpull_store::ignore::is_ignored;
     for ignored in ["~lock.a", ".~lock.b", "a.tmp", "dir/a.part"] {
         assert!(is_ignored(ignored), "{ignored} should be ignored");
     }
@@ -219,7 +332,7 @@ fn manifest_cache_reuses_digest() {
     let (second, _) = manifest::generate(&share, &manifest_path, &cache_path).unwrap();
     assert_eq!(first.files[0].sha256, second.files[0].sha256);
 
-    let cache = lanpull::cache::Cache::load(&cache_path).unwrap();
+    let cache = lanpull_store::cache::Cache::load(&cache_path).unwrap();
     assert_eq!(
         cache.entries.get("a.txt").unwrap().sha256,
         first.files[0].sha256
@@ -242,7 +355,7 @@ fn bundle_builds_and_finds_files() {
 
 #[test]
 fn example_config_declares_a_named_share() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/lanpull.conf.example");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../config/lanpull.conf.example");
     let text = fs::read_to_string(&path).unwrap();
     let map = config::parse_kv(&text);
     assert!(

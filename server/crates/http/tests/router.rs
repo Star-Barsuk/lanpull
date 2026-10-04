@@ -20,12 +20,12 @@ use axum::extract::ConnectInfo;
 use axum::http::{header, Request, StatusCode};
 use base64::Engine as _;
 use http_body_util::BodyExt as _;
-use lanpull::access::Rule;
-use lanpull::arm::ArmState;
-use lanpull::clients::{self, Account, Clients};
-use lanpull::config::Config;
-use lanpull::http::{router, AppState};
-use lanpull::policy::Policy;
+use lanpull_core::access::Rule;
+use lanpull_core::arm::ArmState;
+use lanpull_core::clients::{self, Account, Clients};
+use lanpull_core::config::Config;
+use lanpull_core::policy::Policy;
+use lanpull_http::{router, AppState};
 use tower::ServiceExt as _;
 
 const REASON_HEADER: &str = "x-lanpull-reason";
@@ -115,7 +115,7 @@ fn build(accounts: Vec<Account>, access_text: &str) -> (AppState, tempfile::Temp
         audit_log: state_dir.join("access.log"),
     };
 
-    lanpull::manifest::regenerate(&config).unwrap();
+    lanpull_store::manifest::regenerate(&config).unwrap();
 
     let state = AppState::new(config);
     (state, dir)

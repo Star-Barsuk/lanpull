@@ -40,6 +40,8 @@ SHARE   ?=
 
 SCRIPTS := scripts
 CONFIG_ARGS ?=
+CRATE_DIR := crates
+CRATES    := core store http cli
 
 # The share list is materialized before any removal, because `wipe` deletes the
 # configuration (and so the share definitions) before `uninstall` runs.
@@ -195,7 +197,10 @@ audit-bin: build ## Audit the compiled binary's embedded dependency list
 	$(CARGO) audit bin $(BINARY)
 
 geiger: ## Report unsafe usage across the dependency tree
-	$(CARGO) geiger --forbid-only
+	@for member in $(CRATES); do \
+		echo "geiger: $$member"; \
+		(cd $(CRATE_DIR)/$$member && $(CARGO) geiger --forbid-only) || exit 1; \
+	done
 
 security: deny audit audit-bin geiger ## Run every supply-chain security check
 

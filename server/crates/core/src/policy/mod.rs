@@ -7,6 +7,8 @@
 //! expanded into the flat allow-list that the request path and manifest
 //! filtering use.
 
+pub mod access;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -146,6 +148,17 @@ impl Policy {
             return Err(Error::Config(format!("invalid share name '{share}'")));
         }
         Ok(self.shares.entry(share.to_string()).or_default())
+    }
+
+    /// Return `true` when `account` would see at least one path once created.
+    ///
+    /// Unlike [`Policy::expand`], this does not require the account to exist in
+    /// the account file: it answers the question `add-client` asks before the
+    /// account is written, so a `public` rule grants a brand-new account access.
+    pub fn has_effective_rules(&self, account: &str) -> bool {
+        self.shares
+            .values()
+            .any(|share| !share.effective(account).is_empty())
     }
 
     /// Drop an account's deltas across every share, returning whether any existed.
