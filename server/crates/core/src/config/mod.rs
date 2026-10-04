@@ -124,8 +124,17 @@ impl Config {
                 Error::Config(format!("cannot read {}: {e}", path.display()))
             }
         })?;
-        let map = parse_kv(&text);
         let base = path.parent().unwrap_or_else(|| Path::new("."));
+        Self::parse(&text, base)
+    }
+
+    /// Parse and validate configuration `text` as if it were at `base`.
+    ///
+    /// This is the validation half of [`Config::load`], without touching the
+    /// filesystem, so an editor can reject an invalid prospective file before
+    /// it is written.
+    pub fn parse(text: &str, base: &Path) -> Result<Self> {
+        let map = parse_kv(text);
         let config = Self::from_map(&map)?.resolve(base);
         config.validate_isolation()?;
         Ok(config)
@@ -463,6 +472,16 @@ mod tests {
     fn requires_at_least_one_share() {
         let m = map("SERVER_IP=127.0.0.1\n");
         assert!(Config::from_map(&m).is_err());
+    }
+
+    #[test]
+    fn parse_validates_without_a_file() {
+        let base = Path::new("/etc/lanpull");
+        let config = Config::parse("SHARE_reports=/srv/r\nSERVER_IP=127.0.0.1\n", base).unwrap();
+        assert_eq!(config.shares["reports"], PathBuf::from("/srv/r"));
+
+        let err = Config::parse("SERVER_IP=127.0.0.1\n", base).unwrap_err();
+        assert!(matches!(err, Error::Config(_)), "got {err}");
     }
 
     #[test]

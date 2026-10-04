@@ -86,10 +86,54 @@ fn read(config_path: &Path) -> Result<String> {
 }
 
 /// Write the configuration file back, preserving a trailing newline.
+///
+/// The prospective file is validated first, so an edit that would leave an
+/// invalid configuration is rejected without touching the file.
 fn write(config_path: &Path, lines: &[String]) -> Result<()> {
+    require_canonical_root(config_path)?;
     let mut text = lines.join("\n");
     text.push('\n');
+    let base = config_path.parent().unwrap_or_else(|| Path::new("."));
+    lanpull_core::config::Config::parse(&text, base)?;
     lanpull_core::atomic::write(config_path, text.as_bytes())?;
-    lanpull_core::config::Config::load(config_path)?;
+    if is_canonical(config_path) {
+        normalize_canonical(config_path)?;
+    }
+    Ok(())
+}
+
+/// Whether `config_path` is the canonical `/etc/lanpull/lanpull.conf`.
+fn is_canonical(config_path: &Path) -> bool {
+    config_path.parent() == Some(Path::new(lanpull_core::config::DEFAULT_CONFIG_DIR))
+}
+
+/// Refuse to edit the canonical configuration without root.
+///
+/// The atomic write replaces the file, so a normal user would leave it owned by
+/// itself, breaking the `root:<operator-group>` mode `0640` contract of
+/// `DECISIONS.md` D71. The accounts and policy files are operator-owned and are
+/// not affected.
+fn require_canonical_root(config_path: &Path) -> Result<()> {
+    if is_canonical(config_path) && crate::init::effective_uid() != 0 {
+        return Err(Error::Usage(format!(
+            "editing the canonical {} needs root; run 'sudo lanpull ...'",
+            config_path.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Restore the canonical ownership and mode after a root edit.
+///
+/// The group is the group of `/etc/lanpull` (the operator group set by
+/// `install`); the owner is root and the mode is `0640`, matching
+/// `DECISIONS.md` D71.
+fn normalize_canonical(config_path: &Path) -> Result<()> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    let dir = config_path.parent().unwrap_or_else(|| Path::new("."));
+    let group = std::fs::metadata(dir)?.gid();
+    std::fs::set_permissions(config_path, std::fs::Permissions::from_mode(0o640))?;
+    std::os::unix::fs::chown(config_path, Some(0), Some(group))?;
     Ok(())
 }

@@ -166,6 +166,13 @@ fn remove(config_path: &Path, name: &str, yes: bool, dry_run: bool) -> Result<Ou
     if !config.shares.contains_key(name) {
         return Err(Error::Config(format!("no such share: {name}")));
     }
+    if config.shares.len() <= 1 {
+        return Err(Error::Usage(
+            "cannot remove the last share; at least one SHARE_<name> is required \
+             (use 'lanpull config set SHARE_<name> <dir>' to change it)"
+                .to_string(),
+        ));
+    }
     if !dry_run {
         crate::confirm::require(yes, &format!("remove share {name}"))?;
     }
