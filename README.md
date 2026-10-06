@@ -140,7 +140,7 @@ After `make install`, the operator drives the server with the installed
 `lanpull` binary, and the configuration is created by the binary itself:
 
 ```bash
-sudo lanpull init            # create /etc/lanpull/lanpull.conf (prompts)
+sudo lanpull init            # create /etc/lanpull/lanpull.conf
 ```
 
 `lanpull init` derives `SERVER_IP` from the main routing table, so it ignores
@@ -203,7 +203,7 @@ lanpull access public add <share>:<path>
 lanpull access client add <client-name> <share>:<path>
 
 # create the account and stage a ready-to-copy folder
-lanpull account add <client-name> [--ip <client-ip>] --output <output-dir>
+lanpull account add <client-name> [--ip <client-ip>] [--local] --output <output-dir>
 
 # copy the staged folder to the client machine
 lanpull account export <client-name> --to <dir>
@@ -237,7 +237,7 @@ The removal levels are cumulative, and the destructive ones require `CONFIRM=1`:
 
 ```bash
 make clean                      # build artifacts and caches only (no root)
-make distclean CONFIRM=1        # clean + the development config/lanpull.{conf,clients} + access.json
+make distclean CONFIRM=1        # clean + repository runtime leftovers (state.json, *.part, locks)
 make uninstall CONFIRM=1        # binary, systemd unit, /etc/lanpull, and $STATE_DIR
 make uninstall CONFIRM=1 SHARE=1   # also removes every share directory
 make wipe CONFIRM=1             # distclean + uninstall: everything lanpull created
@@ -247,7 +247,9 @@ make wipe CONFIRM=1 SHARE=1     # ...including the distributed files
 Each target escalates only the steps that need root, so no `sudo` prefix is
 required on the command line; run them without `sudo`.
 
-`distclean` removes only the repository-local development configuration.
+`distclean` removes only repository-local runtime leftovers (`state.json`,
+`*.part`, `.lanpull.lock`, `.lanpull.partials.json`) under the source tree; it
+does not touch `/etc/lanpull` or the installed state.
 `uninstall` removes the installed artifacts: the binary, the unit, the whole
 `/etc/lanpull` directory (configuration, accounts, policy), and `$STATE_DIR`
 (manifest, TLS material, arm state, audit log, staged bundle); `SHARE=1`
@@ -265,7 +267,7 @@ machines are not lanpull artifacts, so they are left in place; on each client,
 | Mode | Behavior | Exit code |
 | --- | --- | --- |
 | `pull.py` | Download changed files, verify, replace atomically; prompt once to delete tracked stale files. | `0` clean, `1` per-file errors, `2` fatal |
-| `pull.py --check` | Compare sizes and mtimes only; download nothing. Prints the manifest `generated_at`. | `0` up to date, `1` updates available |
+| `pull.py --check` | Compare sizes and mtimes only; download nothing. Prints the manifest `generated_at` and the update/unchanged counts. | `0` up to date, `1` updates available |
 | `pull.py --dry-run` | Print `NEED`/`VERIFY`/`STALE` actions; change nothing. | `0` |
 | `pull.py --delete` | Like a normal pull, but delete tracked stale files without prompting. | as `pull.py` |
 | `pull.py --self-update` | Compare versions and replace `pull.py` from the served bundle. | `0` current/declined/updated, `2` fatal |
@@ -302,7 +304,7 @@ its single confirmation prompt.
 | `ACCESS_PATH` | JSON access policy. Relative paths resolve against the config file. | `lanpull.access.json` |
 | `AUDIT_LOG` | JSON-lines audit log. | `/var/lib/lanpull/access.log` |
 
-The real file is mode 600 and is never committed. Blank lines and `#` comments
+The real file is mode 640 and is never committed. Blank lines and `#` comments
 are ignored, values may be quoted, and `$NAME`/`${NAME}` environment
 references are expanded. At least one `SHARE_<name>` key is required.
 
@@ -314,9 +316,11 @@ One line per machine:
 <client-name>:$argon2$...[:<client-ip>][:local]
 ```
 
-The optional third field binds the account to a source IP; omit it (or use
-`*`) to accept any address on the LAN. The `local` field marks a self-share
-account, exempt from the arming window. Managed with `lanpull account add`,
+The fields after the hash are positional. The IP field binds the account to a
+source IP; omit it (or use `*`) to accept any address on the LAN. The `local`
+field marks a self-share account, exempt from the arming window; because the
+fields are positional, a local account without an IP is written with an empty
+IP field, for example `<client-name>:$argon2$...::local`. Managed with `lanpull account add`,
 `lanpull account remove`, and `lanpull account passwd`; never committed.
 
 Pick `<client-name>` as a meaningful label for the machine or transfer
