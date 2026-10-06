@@ -1,9 +1,11 @@
+<div align="center">
+
 # lanpull
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](server/Cargo.toml)
-[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](client/pyproject.toml)
-[![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](#requirements)
+[![Rust](https://img.shields.io/badge/Rust-1.88%2B-orange?style=flat&logo=rust&logoColor=white)](server/Cargo.toml) [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat&logo=python&logoColor=white)](client/pyproject.toml) [![TLS](https://img.shields.io/badge/TLS-pinned-brightgreen?style=flat&logo=letsencrypt&logoColor=white)](#security-model)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Platform](https://img.shields.io/badge/Platform-Linux-blueviolet?style=flat&logo=linux&logoColor=white)](#requirements)
+
+</div>
 
 A minimal, manual file-distribution tool for a local network.
 
@@ -751,4 +753,12 @@ and no git hook**; the gates are run deliberately with `make ci`.
 
 ## License
 
-[MIT](LICENSE) © 2026 Star-Barsuk
+MIT — see [LICENSE](LICENSE).
+
+---
+
+<div align="center">
+
+**© 2026 Star-Barsuk**
+
+</div>
