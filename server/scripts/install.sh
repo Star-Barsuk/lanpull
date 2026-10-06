@@ -72,7 +72,8 @@ run_root install -Dm755 "$binary" "$bin_dir/lanpull"
 #    canonical configuration, never the development path.
 tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
-sed -e "s|__LANPULL_USER__|$operator|g" \
+sed -e "s|__LANPULL_BIN__|$bin_dir/lanpull|g" \
+    -e "s|__LANPULL_USER__|$operator|g" \
     -e "s|__LANPULL_GROUP__|$group|g" \
     -e "s|__LANPULL_CONF__|$conf_dir/lanpull.conf|g" \
     -e "s|__LANPULL_STATE_DIR__|$state_dir|g" "$unit_src" >"$tmp"

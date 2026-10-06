@@ -6,8 +6,8 @@
 # `make help`; it reads the `## ` comments from the server Makefile.
 set -eu
 
-dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-makefile=$dir/../Makefile
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+makefile=$script_dir/../Makefile
 
 awk 'BEGIN { FS = " ## " }
      /^[a-zA-Z0-9_-]+:.*## / {

@@ -40,9 +40,9 @@ if [ -n "$conf_dir" ]; then
     require_safe_path "$conf_dir" CONFIG_DIR
 fi
 
-# Stop and disable the unit; tolerate an absent unit.
+# Stop the unit; tolerate an absent unit. The unit has no [Install] section, so
+# `systemctl disable` would be a no-op and is intentionally not called.
 run_root systemctl stop "$service" 2>/dev/null || true
-run_root systemctl disable "$service" 2>/dev/null || true
 run_root rm -f "$unit"
 run_root systemctl daemon-reload 2>/dev/null || true
 

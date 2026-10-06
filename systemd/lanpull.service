@@ -1,13 +1,13 @@
 # lanpull systemd unit.
 #
 # Installed by `make install`, which substitutes the placeholders below with
-# the operator user and group, the configuration path, and the state directory. The unit
-# does NOT autostart on boot and has no [Install] section: the operator starts
-# it explicitly for an update round with `lanpull service start`.
+# the operator user and group, the installed binary path, the configuration
+# path, and the state directory. The unit does NOT autostart on boot and has no
+# [Install] section: the operator starts it explicitly for an update round with
+# `lanpull service start`.
 
 [Unit]
 Description=lanpull file-distribution server
-Documentation=file://__LANPULL_CONF__
 After=network-online.target
 Wants=network-online.target
 
@@ -15,7 +15,7 @@ Wants=network-online.target
 Type=simple
 User=__LANPULL_USER__
 Group=__LANPULL_GROUP__
-ExecStart=/usr/local/bin/lanpull serve --config __LANPULL_CONF__
+ExecStart=__LANPULL_BIN__ serve --config __LANPULL_CONF__
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=15
