@@ -16,8 +16,8 @@ use crate::cli::Outcome;
 #[derive(Debug, clap::Args)]
 pub struct ReportArgs {
     /// Only show one account.
-    #[arg(long)]
-    pub account: Option<String>,
+    #[arg(long, alias = "account")]
+    pub user: Option<String>,
     /// Only show requests newer than this duration, for example `7d`.
     #[arg(long)]
     pub since: Option<String>,
@@ -56,7 +56,7 @@ pub fn report(config_path: &Path, args: ReportArgs) -> Result<Outcome> {
         }
         None => None,
     };
-    let summary = audit::summarize(&config.audit_log, args.account.as_deref(), cutoff)?;
+    let summary = audit::summarize(&config.audit_log, args.user.as_deref(), cutoff)?;
     let lines = summary.lines();
     Ok(Outcome::text(lines).with_data(&summary))
 }
@@ -120,11 +120,6 @@ pub fn clean(config_path: &Path, args: CleanArgs) -> Result<Outcome> {
     let config = Config::load(config_path)?;
     let mut targets: Vec<std::path::PathBuf> = Vec::new();
 
-    // Orphaned share-list temp file written by an aborted teardown.
-    let shares_file = config_path.with_extension("conf.shares");
-    if shares_file.exists() {
-        targets.push(shares_file);
-    }
     // Orphaned client-ready folders for accounts that no longer exist.
     let accounts = lanpull_core::clients::Clients::load(&config.clients_path)?;
     let ready = config.state_dir.join("client-ready");

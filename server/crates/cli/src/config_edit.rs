@@ -47,30 +47,6 @@ pub fn append_share(config_path: &Path, name: &str, dir: &Path) -> Result<()> {
     )
 }
 
-/// Remove every `SHARE_<name>` assignment and drop dependents from manifests.
-pub fn remove_share(config_path: &Path, name: &str) -> Result<()> {
-    let key = format!("SHARE_{name}");
-    let text = read(config_path)?;
-    let mut lines: Vec<String> = Vec::new();
-    let mut removed = false;
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        let is_key = !trimmed.starts_with('#')
-            && trimmed
-                .split_once('=')
-                .is_some_and(|(lhs, _)| lhs.trim() == key);
-        if is_key {
-            removed = true;
-            continue;
-        }
-        lines.push(line.to_string());
-    }
-    if !removed {
-        return Err(Error::Config(format!("share {name} is not configured")));
-    }
-    write(config_path, &lines)
-}
-
 /// Read the configuration file as text.
 fn read(config_path: &Path) -> Result<String> {
     std::fs::read_to_string(config_path).map_err(|e| {

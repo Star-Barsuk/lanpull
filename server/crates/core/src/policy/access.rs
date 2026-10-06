@@ -6,174 +6,13 @@
 //! account the whole share, or the paths matching a glob. The default is deny:
 //! an account with no rule sees nothing.
 //!
-//! Glob syntax: `/`-separated segments, where `*` matches within one segment
-//! and `**` matches zero or more segments. Patterns cannot escape the share
-//! (no leading `/`, no `..`, no `_lanpull` segment).
+//! The glob engine itself lives in [`crate::glob`].
 
 use std::collections::BTreeMap;
 
 use crate::config::valid_share_name;
 use crate::error::{Error, Result};
-use crate::relpath;
-
-/// One part of a wildcard segment.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WildcardPart {
-    /// A literal run of characters.
-    Literal(String),
-    /// A `*` wildcard.
-    Star,
-}
-
-/// One glob segment.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PatternSegment {
-    /// `**`: zero or more path segments.
-    AnyDepth,
-    /// A segment containing `*` wildcards.
-    Wildcard(Vec<WildcardPart>),
-    /// A literal segment.
-    Literal(String),
-}
-
-/// A validated path glob together with its source text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Glob {
-    raw: String,
-    segments: Vec<PatternSegment>,
-}
-
-impl Glob {
-    /// Parse and validate a path glob.
-    ///
-    /// Segments are validated without `relpath::validate`, because `**` is a
-    /// valid segment here; everything else (no leading `/`, no empty, dot, or
-    /// reserved segment, no NUL) is rejected.
-    pub fn parse(raw: &str) -> Result<Self> {
-        if raw.is_empty() {
-            return Err(Error::Config("empty glob".to_string()));
-        }
-        if raw.starts_with('/') {
-            return Err(Error::Config(format!(
-                "invalid glob '{raw}': absolute path"
-            )));
-        }
-        if raw.contains('\0') {
-            return Err(Error::Config(format!("invalid glob '{raw}': contains NUL")));
-        }
-        let mut segments = Vec::new();
-        for segment in raw.split('/') {
-            if segment.is_empty() {
-                return Err(Error::Config(format!(
-                    "invalid glob '{raw}': empty segment"
-                )));
-            }
-            if segment == "." || segment == ".." {
-                return Err(Error::Config(format!("invalid glob '{raw}': dot segment")));
-            }
-            if segment.contains(relpath::RESERVED_PREFIX) {
-                return Err(Error::Config(format!(
-                    "invalid glob '{raw}': reserved prefix"
-                )));
-            }
-            segments.push(parse_segment(segment));
-        }
-        Ok(Self {
-            raw: raw.to_string(),
-            segments,
-        })
-    }
-
-    /// Return the source text of the glob.
-    pub fn as_str(&self) -> &str {
-        &self.raw
-    }
-
-    /// Return `true` when this glob matches the concrete share-relative `path`.
-    ///
-    /// Used by the policy editor to decide whether removing a literal path needs
-    /// a `remove` delta: it does both for an exact `public` entry and for a
-    /// `public` glob (for example `**`) that covers the path.
-    pub fn covers(&self, path: &str) -> bool {
-        if relpath::validate(path).is_err() {
-            return false;
-        }
-        let segments: Vec<&str> = path.split('/').collect();
-        match_segments(&self.segments, &segments)
-    }
-}
-
-/// Parse one glob segment.
-fn parse_segment(segment: &str) -> PatternSegment {
-    if segment == "**" {
-        return PatternSegment::AnyDepth;
-    }
-    if !segment.contains('*') {
-        return PatternSegment::Literal(segment.to_string());
-    }
-    let mut parts = Vec::new();
-    let mut literal = String::new();
-    for ch in segment.chars() {
-        if ch == '*' {
-            if !literal.is_empty() {
-                parts.push(WildcardPart::Literal(std::mem::take(&mut literal)));
-            }
-            parts.push(WildcardPart::Star);
-        } else {
-            literal.push(ch);
-        }
-    }
-    if !literal.is_empty() {
-        parts.push(WildcardPart::Literal(literal));
-    }
-    PatternSegment::Wildcard(parts)
-}
-
-/// Match a wildcard segment against a single path segment.
-fn match_wildcard(parts: &[WildcardPart], text: &str) -> bool {
-    match parts.split_first() {
-        None => text.is_empty(),
-        Some((WildcardPart::Literal(literal), rest)) => text
-            .strip_prefix(literal.as_str())
-            .is_some_and(|remainder| match_wildcard(rest, remainder)),
-        Some((WildcardPart::Star, rest)) => {
-            if rest.is_empty() {
-                return true;
-            }
-            text.char_indices()
-                .map(|(index, _)| index)
-                .chain([text.len()])
-                .any(|index| {
-                    text.get(index..)
-                        .is_some_and(|tail| match_wildcard(rest, tail))
-                })
-        }
-    }
-}
-
-/// Match a whole path against a compiled glob.
-fn match_segments(pattern: &[PatternSegment], path: &[&str]) -> bool {
-    match pattern.split_first() {
-        None => path.is_empty(),
-        Some((PatternSegment::AnyDepth, rest)) => (0..=path.len()).any(|skip| {
-            path.get(skip..)
-                .is_some_and(|tail| match_segments(rest, tail))
-        }),
-        Some((segment, rest)) => match path.split_first() {
-            Some((first, tail)) => match_segment(segment, first) && match_segments(rest, tail),
-            None => false,
-        },
-    }
-}
-
-/// Match one pattern segment against one path segment.
-fn match_segment(segment: &PatternSegment, text: &str) -> bool {
-    match segment {
-        PatternSegment::Literal(literal) => literal == text,
-        PatternSegment::Wildcard(parts) => match_wildcard(parts, text),
-        PatternSegment::AnyDepth => false,
-    }
-}
+use crate::glob::Glob;
 
 /// One access rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -277,7 +116,7 @@ impl Access {
                 && rule
                     .glob
                     .as_ref()
-                    .is_none_or(|glob| match_segments(&glob.segments, &segments))
+                    .is_none_or(|glob| glob.matches_segments(&segments))
         };
         if self.denied_rules(account).iter().any(matched) {
             return false;
@@ -392,18 +231,5 @@ mod tests {
         assert_eq!(a.rules("laptop").len(), 2);
         assert_eq!(a.rules("desktop").len(), 1);
         assert!(a.allows("laptop", "media", "music/x"));
-    }
-
-    use proptest::prelude::*;
-
-    proptest! {
-        #[test]
-        fn double_star_matches_any_depth(segments in proptest::collection::vec("[a-z]{1,6}", 0..5)) {
-            let path = segments.join("/");
-            let glob = Glob::parse("**").unwrap();
-            let parts: Vec<&str> = path.split('/').collect();
-            let parts = if path.is_empty() { Vec::new() } else { parts };
-            prop_assert!(match_segments(&glob.segments, &parts));
-        }
     }
 }

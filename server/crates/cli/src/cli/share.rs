@@ -28,17 +28,6 @@ pub enum ShareCommand {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Remove a share from the configuration.
-    Remove {
-        /// Share name.
-        name: String,
-        /// Do not ask for confirmation.
-        #[arg(long)]
-        yes: bool,
-        /// Show what would change without writing the configuration.
-        #[arg(long)]
-        dry_run: bool,
-    },
 }
 
 impl ShareCommand {
@@ -48,7 +37,6 @@ impl ShareCommand {
             Self::List => "share list",
             Self::Rescan => "share rescan",
             Self::Add { .. } => "share add",
-            Self::Remove { .. } => "share remove",
         }
     }
 }
@@ -89,7 +77,6 @@ pub fn run(config_path: &Path, command: ShareCommand) -> Result<Outcome> {
         ShareCommand::List => list(config_path),
         ShareCommand::Rescan => rescan(config_path),
         ShareCommand::Add { name, dir, dry_run } => add(config_path, &name, &dir, dry_run),
-        ShareCommand::Remove { name, yes, dry_run } => remove(config_path, &name, yes, dry_run),
     }
 }
 
@@ -150,36 +137,10 @@ fn add(config_path: &Path, name: &str, dir: &Path, dry_run: bool) -> Result<Outc
         format!("would add share {name} = {}", dir.display())
     } else {
         crate::config_edit::append_share(config_path, name, dir)?;
+        crate::init::ensure_share_ignore(dir)?;
         format!("added share {name}")
     };
     Ok(Outcome::new()
         .line(summary)
         .with_data(&serde_json::json!({ "name": name, "dir": dir, "dry_run": dry_run })))
-}
-
-/// Remove a share from the configuration.
-fn remove(config_path: &Path, name: &str, yes: bool, dry_run: bool) -> Result<Outcome> {
-    let config = Config::load(config_path)?;
-    if !config.shares.contains_key(name) {
-        return Err(Error::Config(format!("no such share: {name}")));
-    }
-    if config.shares.len() <= 1 {
-        return Err(Error::Usage(
-            "cannot remove the last share; at least one SHARE_<name> is required \
-             (use 'lanpull config set SHARE_<name> <dir>' to change it)"
-                .to_string(),
-        ));
-    }
-    if !dry_run {
-        crate::confirm::require(yes, &format!("remove share {name}"))?;
-    }
-    let summary = if dry_run {
-        format!("would remove share {name}")
-    } else {
-        crate::config_edit::remove_share(config_path, name)?;
-        format!("removed share {name}")
-    };
-    Ok(Outcome::new()
-        .line(summary)
-        .with_data(&serde_json::json!({ "name": name, "dry_run": dry_run })))
 }

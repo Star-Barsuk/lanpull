@@ -171,9 +171,11 @@ pub fn access_warnings(config: &Config) -> Vec<String> {
     warnings
 }
 
-/// Report symlinks and reserved-prefix entries under the share.
+/// Report symlinks, reserved-prefix entries, and `.lanpullignore` problems.
 pub fn walk_warnings(share: &Path) -> Result<Vec<String>> {
     let mut warnings = Vec::new();
+    let (_, ignore_warnings) = lanpull_core::ignore::IgnoreRules::load(share);
+    warnings.extend(ignore_warnings);
     for entry in WalkDir::new(share).follow_links(false) {
         let entry = entry.map_err(|e| Error::Io(std::io::Error::other(e.to_string())))?;
         if entry.file_type().is_dir() {

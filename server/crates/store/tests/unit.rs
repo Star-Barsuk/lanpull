@@ -134,12 +134,12 @@ fn account_create_rejects_duplicate_name() {
 
 #[test]
 fn ignore_patterns_match() {
-    use lanpull_store::ignore::is_ignored;
+    use lanpull_core::ignore::is_builtin_ignored;
     for ignored in ["~lock.a", ".~lock.b", "a.tmp", "dir/a.part"] {
-        assert!(is_ignored(ignored), "{ignored} should be ignored");
+        assert!(is_builtin_ignored(ignored), "{ignored} should be ignored");
     }
     for kept in ["a.txt", "part", "archive.tar.gz"] {
-        assert!(!is_ignored(kept), "{kept} should not be ignored");
+        assert!(!is_builtin_ignored(kept), "{kept} should not be ignored");
     }
 }
 
@@ -314,6 +314,157 @@ fn manifest_skips_ignored_reserved_and_symlinks() {
     assert!(manifest_path.is_file());
     assert!(cache_path.is_file());
     assert!(!state.join("manifest.json.tmp").exists());
+}
+
+#[test]
+fn manifest_honors_lanpullignore() {
+    let dir = tempfile::tempdir().unwrap();
+    let share = dir.path().join("share");
+    fs::create_dir_all(share.join("drafts")).unwrap();
+    fs::write(share.join("keep.txt"), b"keep").unwrap();
+    fs::write(share.join("drafts/skip.txt"), b"skip").unwrap();
+    fs::write(
+        share.join(".lanpullignore"),
+        b"# ignore drafts\n*.iso\ndrafts/\n",
+    )
+    .unwrap();
+
+    let state = dir.path().join("state");
+    fs::create_dir_all(&state).unwrap();
+    let manifest_path = state.join("manifest.json");
+    let cache_path = state.join("manifest.cache.json");
+
+    let (manifest, warnings) = manifest::generate(&share, &manifest_path, &cache_path).unwrap();
+
+    let paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, vec!["keep.txt"]);
+    assert!(warnings.ignore.is_empty());
+}
+
+#[test]
+fn manifest_applies_the_default_ignore_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let share = dir.path().join("share");
+    // Real content that must be distributed.
+    fs::create_dir_all(share.join("src")).unwrap();
+    for file in [
+        "README.md",
+        "Cargo.toml",
+        "package.json",
+        "report.pdf",
+        "src/main.rs",
+    ] {
+        fs::write(share.join(file), b"content").unwrap();
+    }
+    // Build, cache, VCS, editor, and OS artifacts that must never be.
+    for file in [
+        "target/debug/lanpull",
+        "__pycache__/m.pyc",
+        ".venv/bin/python",
+        "node_modules/pkg/a.js",
+        ".git/HEAD",
+        "foo.o",
+        "libfoo.so",
+        "build/out.bin",
+        "dist/app.js",
+        "server.log",
+        "~$deck.docx",
+        ".DS_Store",
+        "notes.swp",
+    ] {
+        let path = share.join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, b"junk").unwrap();
+    }
+
+    let state = dir.path().join("state");
+    fs::create_dir_all(&state).unwrap();
+    let (manifest, warnings) = manifest::generate(
+        &share,
+        &state.join("manifest.json"),
+        &state.join("manifest.cache.json"),
+    )
+    .unwrap();
+
+    let paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        vec![
+            "Cargo.toml",
+            "README.md",
+            "package.json",
+            "report.pdf",
+            "src/main.rs",
+        ]
+    );
+    assert!(warnings.ignore.is_empty());
+}
+
+#[test]
+fn manifest_negation_overrides_a_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let share = dir.path().join("share");
+    fs::create_dir_all(&share).unwrap();
+    fs::write(share.join("server.log"), b"log").unwrap();
+    fs::write(share.join(".lanpullignore"), b"!server.log\n").unwrap();
+
+    let state = dir.path().join("state");
+    fs::create_dir_all(&state).unwrap();
+    let (manifest, _) = manifest::generate(
+        &share,
+        &state.join("manifest.json"),
+        &state.join("manifest.cache.json"),
+    )
+    .unwrap();
+
+    let paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, vec!["server.log"]);
+}
+
+#[test]
+fn manifest_reports_ignore_warnings_without_failing() {
+    let dir = tempfile::tempdir().unwrap();
+    let share = dir.path().join("share");
+    fs::create_dir_all(&share).unwrap();
+    fs::write(share.join("keep.txt"), b"keep").unwrap();
+    fs::write(share.join(".lanpullignore"), b"bad//pattern\n").unwrap();
+
+    let state = dir.path().join("state");
+    fs::create_dir_all(&state).unwrap();
+    let (manifest, warnings) = manifest::generate(
+        &share,
+        &state.join("manifest.json"),
+        &state.join("manifest.cache.json"),
+    )
+    .unwrap();
+
+    assert_eq!(manifest.files.len(), 1);
+    assert_eq!(warnings.ignore.len(), 1);
+    assert!(warnings.ignore[0].contains("bad//pattern"));
+}
+
+#[test]
+fn manifest_ignores_a_nested_lanpullignore_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let share = dir.path().join("share");
+    fs::create_dir_all(share.join("sub")).unwrap();
+    fs::write(share.join("sub/.lanpullignore"), b"*.iso\n").unwrap();
+    fs::write(share.join("sub/a.iso"), b"iso").unwrap();
+    fs::write(share.join("keep.txt"), b"keep").unwrap();
+
+    let state = dir.path().join("state");
+    fs::create_dir_all(&state).unwrap();
+    let (manifest, _) = manifest::generate(
+        &share,
+        &state.join("manifest.json"),
+        &state.join("manifest.cache.json"),
+    )
+    .unwrap();
+
+    let paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
+    // Only the root file is parsed, so the nested rule has no effect; the nested
+    // file itself is never distributed.
+    assert_eq!(paths, vec!["keep.txt", "sub/a.iso"]);
 }
 
 #[test]

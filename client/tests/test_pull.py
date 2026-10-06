@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import http.client
+import os
 import ssl
 from pathlib import Path
 from typing import cast
@@ -465,3 +466,157 @@ def test_run_clean_skips_unsafe_mirror(tmp_path: Path) -> None:
     state.write_text("{}", encoding="utf-8")
     assert pull.run_clean(cdir, {"MIRROR_root": "/"}, _clean_options(yes=True)) == 0
     assert not state.exists()
+
+
+def _manifest(files: list[tuple[str, bytes]]) -> dict[str, object]:
+    """Build a whole-file-v1 manifest for the given (path, body) pairs."""
+    return {
+        "scheme": "whole-file-v1",
+        "generated_at": "2026-01-01T00:00:00Z",
+        "files": [
+            {
+                "path": path,
+                "size": len(body),
+                "mtime": 1.0,
+                "sha256": hashlib.sha256(body).hexdigest(),
+            }
+            for path, body in files
+        ],
+    }
+
+
+class _ManifestClient:
+    """Minimal client serving one manifest per share and refusing downloads."""
+
+    def __init__(self, manifests: dict[str, dict[str, object]]) -> None:
+        self._manifests = manifests
+
+    def get_json(self, path: str, unavailable: str) -> dict[str, object]:
+        """Return the manifest for the requested share."""
+        for share, manifest in self._manifests.items():
+            if pull.manifest_path(share) == path:
+                return manifest
+        raise pull.FatalError(unavailable)
+
+    def connect(self) -> _FakeConnection:
+        """Fail: these tests never download a file."""
+        raise AssertionError("connect() should not be called")
+
+
+def _options(**overrides: object) -> pull.Options:
+    """Build a pull Options with the given overrides."""
+    values: dict[str, object] = {
+        "share": None,
+        "check": False,
+        "dry_run": False,
+        "delete": False,
+        "self_update": False,
+        "clean": False,
+        "yes": False,
+    }
+    values.update(overrides)
+    return pull.Options(**values)  # type: ignore[arg-type]
+
+
+def test_run_pull_requires_a_mirror(tmp_path: Path) -> None:
+    client = cast("pull.HttpClient", _ManifestClient({}))
+    with pytest.raises(pull.FatalError, match="no MIRROR"):
+        pull.run_pull(tmp_path, client, {}, _options())
+
+
+def test_run_pull_rejects_an_unconfigured_share(tmp_path: Path) -> None:
+    mirror = tmp_path / "mirror"
+    mirror.mkdir()
+    client = cast("pull.HttpClient", _ManifestClient({}))
+    with pytest.raises(pull.FatalError, match="not configured"):
+        pull.run_pull(tmp_path, client, {"MIRROR_reports": str(mirror)}, _options(share="media"))
+
+
+def test_check_reports_updates_without_writing_state(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    mirror = tmp_path / "mirror"
+    client = cast("pull.HttpClient", _ManifestClient({"reports": _manifest([("a.txt", b"hello")])}))
+    conf = {"MIRROR_reports": str(mirror)}
+    assert pull.run_pull(tmp_path, client, conf, _options(check=True)) == 1
+    text = capsys.readouterr().out
+    assert "generated_at: 2026-01-01T00:00:00Z" in text
+    assert "updates available: 1" in text
+    assert not (tmp_path / "state.json").exists()
+
+
+def test_check_is_clean_when_the_mirror_matches(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    mirror = tmp_path / "mirror"
+    mirror.mkdir()
+    target = mirror / "a.txt"
+    target.write_bytes(b"hello")
+    os.utime(target, (1, 1))
+    client = cast("pull.HttpClient", _ManifestClient({"reports": _manifest([("a.txt", b"hello")])}))
+    conf = {"MIRROR_reports": str(mirror)}
+    assert pull.run_pull(tmp_path, client, conf, _options(check=True)) == 0
+    assert "updates available: 0" in capsys.readouterr().out
+
+
+def test_dry_run_prints_the_plan_and_changes_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    mirror = tmp_path / "mirror"
+    client = cast("pull.HttpClient", _ManifestClient({"reports": _manifest([("a.txt", b"hello")])}))
+    conf = {"MIRROR_reports": str(mirror)}
+    assert pull.run_pull(tmp_path, client, conf, _options(dry_run=True)) == 0
+    text = capsys.readouterr().out
+    assert "NEED: a.txt" in text
+    assert "planned: 1 need, 0 verify, 0 stale" in text
+    assert not (mirror / "a.txt").exists()
+    assert not (tmp_path / "state.json").exists()
+
+
+def test_dry_run_lists_stale_without_deleting(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    mirror = tmp_path / "mirror"
+    mirror.mkdir()
+    (mirror / "gone.txt").write_text("old", encoding="utf-8")
+    pull.save_state(tmp_path / "state.json", {"reports": {"gone.txt"}})
+    client = cast("pull.HttpClient", _ManifestClient({"reports": _manifest([])}))
+    conf = {"MIRROR_reports": str(mirror)}
+    assert pull.run_pull(tmp_path, client, conf, _options(dry_run=True)) == 0
+    assert "STALE: gone.txt" in capsys.readouterr().out
+    assert (mirror / "gone.txt").exists()
+    assert pull.load_state(tmp_path / "state.json") == {"reports": {"gone.txt"}}
+
+
+def test_delete_removes_only_tracked_stale(tmp_path: Path) -> None:
+    mirror = tmp_path / "mirror"
+    mirror.mkdir()
+    (mirror / "gone.txt").write_text("old", encoding="utf-8")
+    (mirror / "mine.txt").write_text("keep", encoding="utf-8")
+    pull.save_state(tmp_path / "state.json", {"reports": {"gone.txt"}})
+    client = cast("pull.HttpClient", _ManifestClient({"reports": _manifest([])}))
+    conf = {"MIRROR_reports": str(mirror)}
+    assert pull.run_pull(tmp_path, client, conf, _options(delete=True)) == 0
+    assert not (mirror / "gone.txt").exists()
+    assert (mirror / "mine.txt").exists()
+    assert pull.load_state(tmp_path / "state.json") == {"reports": set()}
+
+
+def test_load_state_tolerates_corrupt_and_partial(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    assert pull.load_state(path) == {}
+    path.write_text("{not json", encoding="utf-8")
+    assert pull.load_state(path) == {}
+    path.write_text('{"reports": "not-a-list", "media": ["x", 1]}', encoding="utf-8")
+    assert pull.load_state(path) == {"media": {"x"}}
+
+
+def test_main_without_server_url_exits_two(capsys: pytest.CaptureFixture[str]) -> None:
+    assert pull.main([]) == 2
+    assert "SERVER_URL" in capsys.readouterr().err
+
+
+def test_parse_args_version_exits_zero() -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        pull.parse_args(["--version"])
+    assert excinfo.value.code == 0

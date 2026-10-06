@@ -29,18 +29,13 @@ LANPULL        ?= $(BIN_DIR)/lanpull
 SERVICE        ?= lanpull.service
 UNIT           ?= /etc/systemd/system/$(SERVICE)
 CONFIG_DIR     ?= /etc/lanpull
-SYSTEM_CONF    := $(CONFIG_DIR)/lanpull.conf
 OPERATOR       ?= $(if $(SUDO_USER),$(SUDO_USER),$(shell id -un))
 OPERATOR_GROUP ?= $(shell id -gn $(OPERATOR) 2>/dev/null || id -gn)
 CLIENT_DIR     ?= ../client
 STATE_DIR      ?= /var/lib/lanpull
 STATE_DIR_ABS  := $(abspath $(STATE_DIR))
-# Materialized before a teardown so `SHARE=1` removes the right directories.
-# Kept outside /etc/lanpull: a user-driven teardown cannot write there.
-SHARES_FILE    ?= $(CURDIR)/.lanpull.shares
 
 CONFIRM ?=
-SHARE   ?=
 
 SCRIPTS := scripts
 CRATE_DIR := crates
@@ -48,10 +43,10 @@ CRATES    := core store http cli
 
 UNINSTALL_CMD = $(SCRIPTS)/uninstall.sh --binary "$(LANPULL)" --unit "$(UNIT)" \
 	--state-dir "$(STATE_DIR_ABS)" --conf-dir "$(CONFIG_DIR)" \
-	--shares-file "$(SHARES_FILE)" --share "$(SHARE)" --service "$(SERVICE)"
+	--service "$(SERVICE)"
 
 .PHONY: help setup build install uninstall wipe \
-        clean distclean confirm check-tools check-scripts e2e client-bundle \
+        clean distclean confirm check-tools check-scripts cli-test e2e client-bundle \
         fmt fmt-check lint doc test deny audit audit-bin geiger security ci
 
 help: ## Show available targets
@@ -76,20 +71,12 @@ install: build ## Install the binary, unit, config dir, and client bundle
 		--group "$(OPERATOR_GROUP)" --conf-dir "$(CONFIG_DIR)" \
 		--client-dir "$(CLIENT_DIR)"
 
-uninstall: confirm ## Remove the binary, unit, /etc/lanpull, and state (CONFIRM=1, SHARE=1)
-	@if [ "$(SHARE)" = "1" ]; then \
-		$(SCRIPTS)/shares.sh "$(SYSTEM_CONF)" >"$(SHARES_FILE)" || exit 1; \
-	fi
+uninstall: confirm ## Remove the binary, unit, /etc/lanpull, and state (CONFIRM=1)
 	$(UNINSTALL_CMD)
-	@rm -f "$(SHARES_FILE)"
 
-wipe: confirm ## Remove everything lanpull created (CONFIRM=1, SHARE=1)
-	@if [ "$(SHARE)" = "1" ]; then \
-		$(SCRIPTS)/shares.sh "$(SYSTEM_CONF)" >"$(SHARES_FILE)" || exit 1; \
-	fi
+wipe: confirm ## Remove everything lanpull created (CONFIRM=1)
 	$(MAKE) distclean CONFIRM=1
 	$(UNINSTALL_CMD)
-	@rm -f "$(SHARES_FILE)"
 
 clean: ## Remove build artifacts and caches (no root)
 	$(CARGO) clean
@@ -98,7 +85,7 @@ clean: ## Remove build artifacts and caches (no root)
 confirm: ## Refuse a destructive target unless CONFIRM=1 is given
 	@if [ "$(CONFIRM)" != "1" ]; then \
 		echo "lanpull: this target deletes configuration, credentials, and/or state."; \
-		echo "         re-run with CONFIRM=1 to proceed (SHARE=1 also removes the share directories)."; \
+		echo "         re-run with CONFIRM=1 to proceed."; \
 		exit 1; \
 	fi
 
@@ -137,6 +124,9 @@ doc: ## Build docs and deny warnings (catches broken intra-doc links)
 test: ## Run the Rust test suite
 	$(CARGO) test --locked --workspace
 
+cli-test: build ## Run the operator-style CLI test against the built binary
+	$(SCRIPTS)/cli_test.sh "$(abspath $(BINARY))"
+
 deny: ## Enforce the dependency policy (advisories, licenses, bans, sources)
 	$(CARGO) deny check
 
@@ -154,4 +144,4 @@ geiger: ## Report unsafe usage across the dependency tree
 
 security: deny audit audit-bin geiger ## Run every supply-chain security check
 
-ci: check-tools check-scripts fmt-check lint doc test security ## Run every Rust quality and security gate
+ci: check-tools check-scripts fmt-check lint doc test cli-test security ## Run every Rust quality and security gate

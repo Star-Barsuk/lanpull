@@ -7,6 +7,5 @@
 
 pub mod bundle;
 pub mod cache;
-pub mod ignore;
 pub mod manifest;
 pub mod status;

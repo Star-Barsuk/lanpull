@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use lanpull_core::config as core_config;
 use lanpull_core::error::{Error, Result};
+use lanpull_core::ignore::IGNORE_FILE_NAME;
 
 use crate::cli::share::InitArgs;
 use crate::cli::Outcome;
@@ -62,6 +63,7 @@ pub fn run(config_path: &Path, args: &InitArgs) -> Result<Outcome> {
         if !dir.is_dir() {
             std::fs::create_dir_all(dir)?;
         }
+        ensure_share_ignore(dir)?;
     }
     create_state_dir(&state_dir)?;
 
@@ -109,6 +111,44 @@ pub fn run(config_path: &Path, args: &InitArgs) -> Result<Outcome> {
             "shares": shares_json,
         }));
     Ok(outcome)
+}
+
+/// The template written to a share's `.lanpullignore` when it is absent.
+const IGNORE_TEMPLATE: &str = "\
+# lanpull ignore rules for this share, one pattern per line.
+# Read by 'lanpull share rescan'; matching files are never distributed.
+# lanpull already ignores common build, cache, version-control, and editor
+# artifacts; the rules below add to that set, and '!' re-includes a path the
+# defaults ignored. A pattern that names a directory also ignores its contents.
+# '#' starts a comment; '*' matches within a path segment and '**' across
+# segments; a pattern without '/' matches its name at any depth. Lock and
+# partial files always stay ignored and cannot be re-included.
+#
+# Examples:
+#   *.iso
+#   drafts/**
+#   !build/keep.txt
+";
+
+/// Create `<dir>/.lanpullignore` if it is absent, owned like the share
+/// directory.
+///
+/// The file is an operator-editable control: an existing file is never
+/// overwritten. When running as root (a canonical `init`), the new file is
+/// given the share directory's owner and group so the operator can edit it.
+pub fn ensure_share_ignore(dir: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let path = dir.join(IGNORE_FILE_NAME);
+    if path.exists() {
+        return Ok(());
+    }
+    std::fs::write(&path, IGNORE_TEMPLATE)?;
+    if effective_uid() == 0 {
+        let meta = std::fs::metadata(dir)?;
+        std::os::unix::fs::chown(&path, Some(meta.uid()), Some(meta.gid()))?;
+    }
+    Ok(())
 }
 
 /// Give a canonical configuration the ownership the service needs.

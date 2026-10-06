@@ -5,7 +5,7 @@
 #
 # The code is split into four crates so the core can be tested without the
 # network and the CLI stays a thin shell:
-#   lanpull-core   configuration, policy, accounts, TLS, state, error
+#   lanpull-core   configuration, policy, glob/ignore, accounts, TLS, state, error
 #   lanpull-store  share walk, manifests, cache, bundle, status
 #   lanpull-http   the HTTPS server and its request handlers
 #   lanpull-cli    the `lanpull` binary

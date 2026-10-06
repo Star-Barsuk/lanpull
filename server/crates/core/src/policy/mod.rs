@@ -15,10 +15,11 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::access::{Access, Glob, Rule};
+use crate::access::{Access, Rule};
 use crate::clients::Clients;
 use crate::config::{valid_share_name, Config};
 use crate::error::{Error, Result};
+use crate::glob::Glob;
 
 /// The only policy schema version defined so far.
 pub const VERSION: u32 = 1;

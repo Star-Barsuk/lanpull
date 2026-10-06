@@ -45,6 +45,13 @@ client="$tmp/client"
 mkdir -p "$share/sub" "$state"
 printf 'hello\n' >"$share/a.txt"
 printf 'nested\n' >"$share/sub/b.txt"
+# Default-ignored artifacts: build, cache, and VCS files that must never be
+# distributed unless an operator re-includes them.
+mkdir -p "$share/target/debug" "$share/__pycache__" "$share/.git" "$share/node_modules/pkg"
+printf 'bin\n' >"$share/target/debug/app"
+printf 'pyc\n' >"$share/__pycache__/m.pyc"
+printf 'ref\n' >"$share/.git/HEAD"
+printf 'js\n' >"$share/node_modules/pkg/a.js"
 
 # STATE_DIR already exists, so init never escalates.
 "$binary" init --config "$conf" --share "default=$share" --state-dir "$state" \
@@ -84,9 +91,15 @@ if "$client/pull.py" --check >/dev/null; then
     die "e2e: --check should report updates before the first pull"
 fi
 "$client/pull.py" --dry-run | grep -q 'NEED: a.txt' || die "e2e: dry-run missed a.txt"
+if "$client/pull.py" --dry-run | grep -q 'target/debug'; then
+    die "e2e: default-ignored path listed in --dry-run"
+fi
 "$client/pull.py" >/dev/null
 [ -f "$tmp/mirror/default/a.txt" ] || die "e2e: a.txt not delivered"
 [ -f "$tmp/mirror/default/sub/b.txt" ] || die "e2e: sub/b.txt not delivered"
+for ignored in target/debug/app __pycache__/m.pyc .git/HEAD node_modules/pkg/a.js; do
+    [ ! -e "$tmp/mirror/default/$ignored" ] || die "e2e: default-ignored file delivered: $ignored"
+done
 "$client/pull.py" --check >/dev/null || die "e2e: --check should be clean after the first pull"
 
 # Second round: a modified and a new file are picked up after rescan.
@@ -97,6 +110,24 @@ printf 'new\n' >"$share/c.txt"
 grep -q 'updated' "$tmp/mirror/default/a.txt" || die "e2e: a.txt not updated"
 [ -f "$tmp/mirror/default/c.txt" ] || die "e2e: c.txt not delivered"
 "$client/pull.py" --check >/dev/null || die "e2e: --check should be clean after the second pull"
+
+# Ignore round: an operator rule excludes a file, a `!` rule overrides a
+# default, an invalid line is a warning rather than a failure, and the ignore
+# file itself is never distributed.
+printf 'secret\n' >"$share/ignored.bin"
+printf 'ignored.bin\n!__pycache__/\nbad//pattern\n' >"$share/.lanpullignore"
+"$binary" share rescan --config "$conf" >/dev/null 2>"$tmp/rescan.err" \
+    || die "e2e: rescan failed on an invalid .lanpullignore line"
+grep -q 'bad//pattern' "$tmp/rescan.err" || die "e2e: rescan did not warn about the invalid pattern"
+if "$client/pull.py" --dry-run | grep -q 'ignored.bin'; then
+    die "e2e: .lanpullignore entry was served"
+fi
+"$client/pull.py" >/dev/null
+[ ! -e "$tmp/mirror/default/ignored.bin" ] || die "e2e: ignored file was delivered"
+[ -f "$tmp/mirror/default/__pycache__/m.pyc" ] || die "e2e: negated default was not delivered"
+[ ! -e "$tmp/mirror/default/target/debug/app" ] || die "e2e: target/ leaked past a negation"
+[ ! -e "$tmp/mirror/default/.lanpullignore" ] || die "e2e: .lanpullignore was delivered"
+"$client/pull.py" --check >/dev/null || die "e2e: --check should be clean after the ignore round"
 
 # Third round: a file removed on the server is deleted with --delete.
 rm -f "$share/a.txt"

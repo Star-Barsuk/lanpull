@@ -38,7 +38,6 @@ htmlcov/
 *.tmp
 *.tmp.*
 .lanpull.lock
-.lanpull.shares
 state.json
 .lanpull.partials.json
 

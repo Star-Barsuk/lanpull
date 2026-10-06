@@ -18,12 +18,12 @@ use lanpull_core::clients::Clients;
 use lanpull_core::config::Config;
 use lanpull_core::error::{Error, Result};
 use lanpull_core::hash::sha256_file;
+use lanpull_core::ignore::IgnoreRules;
 use lanpull_core::policy::Policy;
 use lanpull_core::relpath;
 use lanpull_core::timeutil;
 
 use crate::cache::Cache;
-use crate::ignore::is_ignored;
 
 /// The only transfer scheme defined so far.
 pub const SCHEME: &str = "whole-file-v1";
@@ -61,6 +61,8 @@ pub struct Warnings {
     pub reserved: Vec<String>,
     /// Files whose modification time changed while they were hashed.
     pub modified_during_walk: Vec<String>,
+    /// Problems reading or parsing the share's `.lanpullignore`.
+    pub ignore: Vec<String>,
 }
 
 impl Manifest {
@@ -91,7 +93,11 @@ pub fn generate(
     let cache = Cache::load(cache_path)?;
     let mut next_cache = Cache::default();
     let mut files: Vec<Entry> = Vec::new();
-    let mut warnings = Warnings::default();
+    let (rules, ignore_warnings) = IgnoreRules::load(share);
+    let mut warnings = Warnings {
+        ignore: ignore_warnings,
+        ..Warnings::default()
+    };
 
     for entry in WalkDir::new(share).follow_links(false) {
         let dir_entry = entry.map_err(|e| Error::Io(std::io::Error::other(e.to_string())))?;
@@ -110,7 +116,7 @@ pub fn generate(
             warnings.reserved.push(rel);
             continue;
         }
-        if is_ignored(&rel) {
+        if rules.is_ignored(&rel) {
             continue;
         }
 
@@ -214,6 +220,9 @@ pub fn regenerate(config: &Config) -> Result<Regenerated> {
             report
                 .warnings
                 .push(format!("{share}: file modified during walk: {path}"));
+        }
+        for warning in &warnings.ignore {
+            report.warnings.push(format!("{share}: {warning}"));
         }
         report
             .share_files
