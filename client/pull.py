@@ -381,7 +381,7 @@ def load_partials(path: Path) -> dict[str, str]:
 
 def save_partials(path: Path, partials: dict[str, str]) -> None:
     """Persist the resume validators."""
-    path.write_text(json.dumps(partials, sort_keys=True), encoding="utf-8")
+    path.write_text(json.dumps(partials, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
 
 def load_state(path: Path) -> dict[str, set[str]]:
@@ -587,7 +587,8 @@ def prompt_delete(stale: list[str]) -> bool:
     """List stale files and ask once whether to delete them."""
     for path in stale:
         print(f"STALE: {path}")
-    answer = input("Delete these files? [y/N] ").strip().lower()
+    print("Delete these files? [y/N] ", end="", file=sys.stderr)
+    answer = input().strip().lower()
     return answer in ("y", "yes")
 
 
@@ -736,7 +737,7 @@ def download_bundle_file(client: HttpClient, name: str, part: Path) -> None:
         connection.close()
 
 
-def run_self_update(cdir: Path, client: HttpClient) -> int:
+def run_self_update(cdir: Path, client: HttpClient, assume_yes: bool = False) -> int:
     """Update this script from the server's client bundle."""
     local = __version__
     if not local:
@@ -753,9 +754,11 @@ def run_self_update(cdir: Path, client: HttpClient) -> int:
         print("client already up to date")
         return 0
 
-    answer = input(f"Update client {local} -> {version}? [y/N] ").strip().lower()
-    if answer not in ("y", "yes"):
-        return 0
+    if not assume_yes:
+        print(f"Update client {local} -> {version}? [y/N] ", end="", file=sys.stderr)
+        answer = input().strip().lower()
+        if answer not in ("y", "yes"):
+            return 0
 
     files = data.get("files")
     if not isinstance(files, list):
@@ -913,7 +916,12 @@ def run_clean(cdir: Path, conf: dict[str, str], options: Options) -> int:
     if not options.yes:
         for path in targets:
             print(f"REMOVE: {path}")
-        answer = input(f"Remove these {len(targets)} lanpull artifact(s)? [y/N] ").strip().lower()
+        print(
+            f"Remove these {len(targets)} lanpull artifact(s)? [y/N] ",
+            end="",
+            file=sys.stderr,
+        )
+        answer = input().strip().lower()
         if answer not in ("y", "yes"):
             print("[clean] nothing removed")
             return 0
@@ -946,7 +954,11 @@ def parse_args(argv: list[str]) -> Options:
         action="store_true",
         help="remove this client's runtime leftovers (no server needed)",
     )
-    parser.add_argument("--yes", action="store_true", help="do not ask before cleaning")
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="do not ask before --clean or --self-update",
+    )
     parser.add_argument("--version", action="version", version=__version__)
     parsed = parser.parse_args(argv)
 
@@ -959,8 +971,8 @@ def parse_args(argv: list[str]) -> Options:
     yes = bool(parsed.yes)
     if clean and (check or delete or self_update):
         parser.error("--clean cannot be combined with --check, --delete, or --self-update")
-    if yes and not clean:
-        parser.error("--yes is only meaningful with --clean")
+    if yes and not (clean or self_update):
+        parser.error("--yes is only meaningful with --clean or --self-update")
     return Options(
         share=share,
         check=check,
@@ -993,7 +1005,7 @@ def main(argv: list[str] | None = None) -> int:
         client = HttpClient(host, port, context, credentials, socket.gethostname())
 
         if options.self_update:
-            return run_self_update(directory, client)
+            return run_self_update(directory, client, options.yes)
         return run_pull(directory, client, conf, options)
     except FatalError as exc:
         print(str(exc), file=sys.stderr)

@@ -14,6 +14,11 @@ import pytest
 import pull
 
 
+def test_version_matches_version_file() -> None:
+    version_file = Path(__file__).resolve().parent.parent / "VERSION"
+    assert version_file.read_text(encoding="utf-8").strip() == pull.__version__
+
+
 def test_parse_conf() -> None:
     conf = pull.parse_conf(
         '# comment\nSERVER_URL=https://10.0.0.1:8000\nMIRROR_reports="/srv/reports"\n'
@@ -290,9 +295,9 @@ def test_delete_stale_drops_missing_and_tracked(tmp_path: Path) -> None:
 
 
 def test_prompt_delete(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+    monkeypatch.setattr("builtins.input", lambda: "y")
     assert pull.prompt_delete(["a.txt"])
-    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+    monkeypatch.setattr("builtins.input", lambda: "n")
     assert not pull.prompt_delete(["a.txt"])
 
 
@@ -335,7 +340,7 @@ def test_run_self_update_downloads_new_script(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(pull, "__version__", "1.0.0")
-    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+    monkeypatch.setattr("builtins.input", lambda: "y")
     body = b"new script\n"
     manifest: dict[str, object] = {
         "version": "2.0.0",
@@ -415,11 +420,11 @@ def test_run_clean_prompts_and_honors_answer(
     state = cdir / "state.json"
     state.write_text("{}", encoding="utf-8")
 
-    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+    monkeypatch.setattr("builtins.input", lambda: "n")
     assert pull.run_clean(cdir, {}, _clean_options()) == 0
     assert state.exists()
 
-    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+    monkeypatch.setattr("builtins.input", lambda: "y")
     assert pull.run_clean(cdir, {}, _clean_options()) == 0
     assert not state.exists()
 

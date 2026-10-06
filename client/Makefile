@@ -19,7 +19,7 @@ PIP_AUDIT  := $(BIN)/pip-audit
 .PHONY: help setup lint typecheck test audit clean ci
 
 help: ## Show available targets
-	@awk 'BEGIN { FS = " ## " } /^[a-zA-Z0-9_-]+:.*## / { split($$1, t, ":"); printf "  %-14s %s\n", t[1], $$2 }' $(MAKEFILE_LIST)
+	@awk 'BEGIN { FS = " ## " } /^[a-zA-Z0-9_-]+:.*## / { split($$1, t, ":"); printf "  %-16s %s\n", t[1], $$2 }' $(MAKEFILE_LIST)
 
 $(STAMP): requirements-dev.txt
 	@test -d $(VENV) || $(UV) venv $(VENV)
