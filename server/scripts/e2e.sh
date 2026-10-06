@@ -90,7 +90,8 @@ done
 if "$client/pull.py" --check >/dev/null; then
     die "e2e: --check should report updates before the first pull"
 fi
-"$client/pull.py" --dry-run | grep -q 'NEED: a.txt' || die "e2e: dry-run missed a.txt"
+"$client/pull.py" --dry-run | grep -q 'NEED' || die "e2e: dry-run missed the NEED action"
+"$client/pull.py" --dry-run | grep -q 'a.txt' || die "e2e: dry-run missed a.txt"
 if "$client/pull.py" --dry-run | grep -q 'target/debug'; then
     die "e2e: default-ignored path listed in --dry-run"
 fi
@@ -134,6 +135,17 @@ rm -f "$share/a.txt"
 "$binary" share rescan --config "$conf" >/dev/null
 "$client/pull.py" --delete >/dev/null
 [ ! -e "$tmp/mirror/default/a.txt" ] || die "e2e: stale a.txt not deleted"
+
+# Fourth round: --mirror makes the destination an exact copy of the share,
+# removing files created locally and the directories they leave empty.
+mkdir -p "$tmp/mirror/default/junk"
+printf 'extra\n' >"$tmp/mirror/default/operator.txt"
+printf 'nested\n' >"$tmp/mirror/default/junk/x.txt"
+"$client/pull.py" --mirror --yes >/dev/null
+[ ! -e "$tmp/mirror/default/operator.txt" ] || die "e2e: --mirror left an extra file"
+[ ! -e "$tmp/mirror/default/junk" ] || die "e2e: --mirror left an empty directory"
+[ -f "$tmp/mirror/default/sub/b.txt" ] || die "e2e: --mirror removed a delivered file"
+[ -f "$tmp/mirror/default/c.txt" ] || die "e2e: --mirror removed a delivered file"
 
 # Self-update at the same version is a no-op.
 "$client/pull.py" --self-update >/dev/null || die "e2e: self-update failed"

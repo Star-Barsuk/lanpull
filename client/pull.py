@@ -12,7 +12,10 @@ and one ``MIRROR_<share>=<dir>`` per mirrored share), ``auth``
 ``state.json`` (delivered paths, keyed by share). ``--self-update`` refreshes
 this script from the server bundle. ``--clean`` removes this client's runtime
 leftovers (``state.json``, per-mirror lock/validator files, and ``*.part``)
-without contacting the server.
+without contacting the server. ``--mirror`` makes the destination an exact copy
+of the share, deleting everything not in the manifest (files created locally
+included), except the client's own runtime files. ``--dry-run`` prints the plan
+as a table, capped at ``LIST_CAP`` rows unless ``--all`` is given.
 """
 
 from __future__ import annotations
@@ -33,7 +36,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote, urlsplit
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 SCHEME = "whole-file-v1"
 SHARE_PREFIX = "/_lanpull/share/"
@@ -53,6 +56,7 @@ INTERNAL = frozenset({LOCK_NAME, PARTIALS_NAME})
 RESERVED = "_lanpull"
 CHUNK = 64 * 1024
 TIMEOUT = 120
+LIST_CAP = 50
 
 OK = "OK"
 NEED = "NEED"
@@ -93,9 +97,12 @@ class Options:
     check: bool
     dry_run: bool
     delete: bool
+    mirror: bool
     self_update: bool
     clean: bool
     yes: bool
+    all: bool
+    quiet: bool
 
 
 @dataclasses.dataclass(frozen=True)
@@ -104,15 +111,20 @@ class Progress:
 
     index: int
     total: int
+    quiet: bool = False
 
     def show(self, path: str, done: int, size: int) -> None:
         """Print the percentage of the current file."""
+        if self.quiet:
+            return
         percent = 100 if size <= 0 else min(100, done * 100 // size)
         sys.stdout.write(f"\r[{self.index}/{self.total}] {path} {percent}%")
         sys.stdout.flush()
 
     def finish(self) -> None:
         """Terminate the progress line."""
+        if self.quiet:
+            return
         sys.stdout.write("\n")
         sys.stdout.flush()
 
@@ -239,6 +251,12 @@ def is_ignored(rel: str) -> bool:
 def is_protected(rel: str) -> bool:
     """Return whether a path is internal state or an ignored pattern."""
     return rel in INTERNAL or rel.rsplit("/", 1)[-1] in INTERNAL or is_ignored(rel)
+
+
+def is_internal(rel: str) -> bool:
+    """Return whether a path is the client's own runtime state or staging."""
+    name = rel.rsplit("/", 1)[-1]
+    return name in INTERNAL or name.endswith(".part")
 
 
 def sha256_file(path: Path) -> str:
@@ -452,6 +470,52 @@ def format_bytes(value: int) -> str:
     return f"{size:.1f} TB"
 
 
+def format_rows(rows: list[list[str]]) -> list[str]:
+    """Format rows as an aligned table, padding every column but the last."""
+    columns = max((len(row) for row in rows), default=0)
+    widths = [0] * columns
+    for row in rows:
+        for index, cell in enumerate(row):
+            if index < columns:
+                widths[index] = max(widths[index], len(cell))
+    lines: list[str] = []
+    for row in rows:
+        last = len(row) - 1
+        parts: list[str] = []
+        for index, cell in enumerate(row):
+            if index == last:
+                parts.append(cell)
+            else:
+                parts.append(cell + " " * (widths[index] - len(cell) + 2))
+        lines.append("".join(parts))
+    return lines
+
+
+def render_changes(
+    planned: list[Planned],
+    stale: list[str],
+    extras: list[str],
+    show_all: bool,
+) -> list[str]:
+    """Render the non-OK plan, stale, and extra rows as a capped table."""
+    items: list[tuple[str, str, str]] = [
+        (item.action, format_bytes(item.entry.size), item.entry.path)
+        for item in planned
+        if item.action != OK
+    ]
+    items.extend(("STALE", "-", path) for path in stale)
+    items.extend(("EXTRA", "-", path) for path in extras)
+    if not items:
+        return []
+    limit = len(items) if show_all else LIST_CAP
+    rows = [["ACTION", "SIZE", "PATH"]]
+    rows.extend([action, size, path] for action, size, path in items[:limit])
+    lines = format_rows(rows)
+    if not show_all and len(items) > LIST_CAP:
+        lines.append(f"... and {len(items) - LIST_CAP} more (use --all to list every file)")
+    return lines
+
+
 def check_space(output: Path, needed: int) -> None:
     """Warn when the mirror may not have room for the download."""
     stat = os.statvfs(output)
@@ -583,11 +647,73 @@ def delete_stale(output: Path, stale: list[str], delivered: set[str]) -> int:
     return deleted
 
 
+def delete_paths(output: Path, rels: list[str]) -> int:
+    """Delete files or symlinks under the mirror, reporting failures."""
+    deleted = 0
+    for rel in rels:
+        try:
+            (output / rel).unlink()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            print(f"ERROR: cannot remove {rel}: {exc}", file=sys.stderr)
+            continue
+        deleted += 1
+    return deleted
+
+
+def scan_extras(output: Path, manifest_paths: set[str]) -> list[str]:
+    """Return every mirror entry absent from the manifest, symlinks included.
+
+    Regular files, symlinks to files, and symlinks to directories are all
+    candidates; real directories are left to ``remove_empty_dirs``. The
+    client's own runtime files are never candidates.
+    """
+    extras: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(output, followlinks=False):
+        base = Path(dirpath)
+        for name in filenames:
+            rel = (base / name).relative_to(output).as_posix()
+            if rel not in manifest_paths and not is_internal(rel):
+                extras.append(rel)
+        for name in dirnames:
+            candidate = base / name
+            if candidate.is_symlink():
+                rel = candidate.relative_to(output).as_posix()
+                if rel not in manifest_paths and not is_internal(rel):
+                    extras.append(rel)
+    return sorted(extras)
+
+
+def remove_empty_dirs(root: Path) -> int:
+    """Remove directories left empty under the mirror, deepest first."""
+    removed = 0
+    for dirpath, _dirnames, _filenames in os.walk(root, topdown=False, followlinks=False):
+        path = Path(dirpath)
+        if path == root or path.is_symlink():
+            continue
+        try:
+            path.rmdir()
+        except OSError:
+            continue
+        removed += 1
+    return removed
+
+
 def prompt_delete(stale: list[str]) -> bool:
     """List stale files and ask once whether to delete them."""
     for path in stale:
         print(f"STALE: {path}")
     print("Delete these files? [y/N] ", end="", file=sys.stderr)
+    answer = input().strip().lower()
+    return answer in ("y", "yes")
+
+
+def confirm_mirror(extras: list[str], show_all: bool) -> bool:
+    """List extra files as a table and ask once whether to delete them."""
+    for line in render_changes([], [], extras, show_all):
+        print(line)
+    print(f"Delete these {len(extras)} extra file(s)? [y/N] ", end="", file=sys.stderr)
     answer = input().strip().lower()
     return answer in ("y", "yes")
 
@@ -656,7 +782,12 @@ def run_share(
         unchanged = [item for item in planned if item.action == OK]
 
         manifest_paths = {entry.path for entry in entries}
-        stale = sorted(path for path in delivered - manifest_paths if not is_protected(path))
+        if options.mirror:
+            stale: list[str] = []
+            extras = scan_extras(output, manifest_paths)
+        else:
+            stale = sorted(path for path in delivered - manifest_paths if not is_protected(path))
+            extras = []
 
         if options.check:
             updates = len(need) + len(unsure)
@@ -665,12 +796,13 @@ def run_share(
             return _ShareResult(1 if updates else 0, delivered)
 
         if options.dry_run:
-            for item in planned:
-                if item.action != OK:
-                    print(f"[{share}] {item.action}: {item.entry.path}")
-            for path in stale:
-                print(f"[{share}] STALE: {path}")
-            print(f"[{share}] planned: {len(need)} need, {len(unsure)} verify, {len(stale)} stale")
+            print(f"[{share}] plan (generated_at: {generated_at!s})")
+            for line in render_changes(planned, stale, extras, options.all):
+                print(line)
+            print(
+                f"[{share}] planned: {len(need)} need, {len(unsure)} verify, "
+                f"{len(stale)} stale, {len(extras)} extra"
+            )
             return _ShareResult(0, delivered)
 
         if need:
@@ -683,8 +815,9 @@ def run_share(
         total = len(need)
         for index, item in enumerate(need, start=1):
             entry = item.entry
+            progress = Progress(index, total, options.quiet)
             try:
-                fetch_entry(client, share, entry, output, partials, Progress(index, total))
+                fetch_entry(client, share, entry, output, partials, progress)
             except PerFileError as exc:
                 errors.append(entry.path)
                 print(str(exc), file=sys.stderr)
@@ -696,13 +829,19 @@ def run_share(
                 save_partials(partials_path, partials)
 
         deleted = 0
-        if stale and (options.delete or prompt_delete(stale)):
+        if options.mirror:
+            if extras and (options.yes or confirm_mirror(extras, options.all)):
+                deleted = delete_paths(output, extras)
+                remove_empty_dirs(output)
+            delivered = {entry.path for entry in entries if (output / entry.path).is_file()}
+        elif stale and (options.delete or prompt_delete(stale)):
             deleted = delete_stale(output, stale, delivered)
 
-        print(f"[{share}] downloaded: {downloaded} files, {format_bytes(total_bytes)}")
-        print(f"[{share}] unchanged:  {len(unchanged)} files")
-        print(f"[{share}] deleted:    {deleted} files")
-        print(f"[{share}] errors:     {len(errors)} files")
+        if not options.quiet:
+            print(f"[{share}] downloaded: {downloaded} files, {format_bytes(total_bytes)}")
+            print(f"[{share}] unchanged:  {len(unchanged)} files")
+            print(f"[{share}] deleted:    {deleted} files")
+            print(f"[{share}] errors:     {len(errors)} files")
         for path in errors:
             print(f"  {path}", file=sys.stderr)
         return _ShareResult(1 if errors else 0, delivered)
@@ -945,19 +1084,31 @@ def parse_args(argv: list[str]) -> Options:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(prog="pull.py", description="lanpull pull client")
     parser.add_argument("share", nargs="?", help="mirror only this share (default: all)")
-    parser.add_argument("--check", action="store_true", help="report updates; change nothing")
-    parser.add_argument("--dry-run", action="store_true", help="show the plan; change nothing")
-    parser.add_argument("--delete", action="store_true", help="delete stale files without asking")
-    parser.add_argument("--self-update", action="store_true", help="update pull.py from the server")
-    parser.add_argument(
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--check", action="store_true", help="report updates; change nothing")
+    modes.add_argument(
+        "--mirror",
+        action="store_true",
+        help="exact mirror: delete everything not in the manifest (files you created too)",
+    )
+    modes.add_argument("--self-update", action="store_true", help="update pull.py from the server")
+    modes.add_argument(
         "--clean",
         action="store_true",
         help="remove this client's runtime leftovers (no server needed)",
     )
+    parser.add_argument("--dry-run", action="store_true", help="show the plan; change nothing")
+    parser.add_argument("--delete", action="store_true", help="delete stale files without asking")
+    parser.add_argument(
+        "--all", action="store_true", help="list every file in a plan or deletion list"
+    )
     parser.add_argument(
         "--yes",
         action="store_true",
-        help="do not ask before --clean or --self-update",
+        help="do not ask before --mirror, --clean, or --self-update",
+    )
+    parser.add_argument(
+        "--quiet", action="store_true", help="suppress the progress bar and per-share summary"
     )
     parser.add_argument("--version", action="version", version=__version__)
     parsed = parser.parse_args(argv)
@@ -966,21 +1117,33 @@ def parse_args(argv: list[str]) -> Options:
     check = bool(parsed.check)
     dry_run = bool(parsed.dry_run)
     delete = bool(parsed.delete)
+    mirror = bool(parsed.mirror)
     self_update = bool(parsed.self_update)
     clean = bool(parsed.clean)
     yes = bool(parsed.yes)
-    if clean and (check or delete or self_update):
-        parser.error("--clean cannot be combined with --check, --delete, or --self-update")
-    if yes and not (clean or self_update):
-        parser.error("--yes is only meaningful with --clean or --self-update")
+    show_all = bool(parsed.all)
+    quiet = bool(parsed.quiet)
+    if dry_run and (check or self_update):
+        parser.error("--dry-run cannot be combined with --check or --self-update")
+    if delete and (check or mirror or self_update or clean or dry_run):
+        parser.error("--delete is only valid for a normal pull")
+    if yes and not (mirror or clean or self_update):
+        parser.error("--yes is only meaningful with --mirror, --clean, or --self-update")
+    if show_all and not (dry_run or mirror):
+        parser.error("--all is only meaningful with --dry-run or --mirror")
+    if self_update and share is not None:
+        parser.error("--self-update does not take a share")
     return Options(
         share=share,
         check=check,
         dry_run=dry_run,
         delete=delete,
+        mirror=mirror,
         self_update=self_update,
         clean=clean,
         yes=yes,
+        all=show_all,
+        quiet=quiet,
     )
 
 

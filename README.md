@@ -432,27 +432,35 @@ The client is `<client-folder>/pull.py`. It reads `lanpull.conf`, `auth`, and
 | --- | --- |
 | `[<share>]` | Mirror only this configured share (default: every share). |
 | `--check` | Compare sizes and mtimes; download nothing. Prints `generated_at` and the update/unchanged counts. |
-| `--dry-run` | Print the `NEED`/`VERIFY`/`STALE` plan; change nothing. |
-| `--delete` | Delete tracked stale files without prompting. |
+| `--mirror` | Exact mirror: after the pull, delete everything in the destination that is not in the manifest (files you created included) and remove the directories that are left empty. Prompts once; `--yes` skips the prompt. |
+| `--dry-run` | Print the plan as a table; change nothing. |
+| `--delete` | Delete tracked stale files without prompting (normal pull only). |
+| `--all` | List every file in a plan or deletion list (default: the first 50 rows). |
 | `--self-update` | Replace `pull.py` from the served bundle when the versions differ. |
 | `--clean` | Remove this client's runtime leftovers offline. |
-| `--yes` | Skip the `--clean`/`--self-update` confirmation. |
+| `--yes` | Skip the `--mirror`/`--clean`/`--self-update` confirmation. |
+| `--quiet` | Suppress the progress bar and the per-share summary. |
 | `--version` | Print the client version. |
 
 | Mode | Behavior | Exit code |
 | --- | --- | --- |
 | `pull.py` | Download changed files, verify, replace atomically; prompt once to delete tracked stale files. | `0` clean, `1` per-file errors, `2` fatal |
 | `pull.py --check` | Compare sizes and mtimes only; download nothing. | `0` up to date, `1` updates available |
-| `pull.py --dry-run` | Print `NEED`/`VERIFY`/`STALE` actions; change nothing. | `0` |
+| `pull.py --dry-run` | Print the `NEED`/`VERIFY`/`STALE`/`EXTRA` plan as a table; change nothing. | `0` |
+| `pull.py --mirror` | Like a normal pull, then delete every file not in the manifest and remove emptied directories. Prompts once unless `--yes`. | as `pull.py` |
 | `pull.py --delete` | Like a normal pull, but delete tracked stale files without prompting. | as `pull.py` |
 | `pull.py --self-update` | Compare versions and replace `pull.py` from the served bundle. | `0` current/declined/updated, `2` fatal |
 | `pull.py --clean` | Remove `state.json`, per-mirror `.lanpull.lock`/`.lanpull.partials.json`, and every `*.part`. Never contacts the server. | `0` removed/declined, `1` per-file errors, `2` fatal |
 | `pull.py --version` | Print the client version. | `0` |
 
-`--yes` is only meaningful with `--clean` or `--self-update`; `--clean` cannot be
-combined with `--check`, `--delete`, or `--self-update`. Deletion is limited to
-files lanpull delivered earlier, recorded in `state.json`; files you created in
-the mirror folder are never touched.
+Modes (`--check`, `--mirror`, `--self-update`, `--clean`) are mutually exclusive.
+`--dry-run` works with a normal pull, `--mirror`, and `--clean`; `--delete` is a
+normal-pull modifier only; `--all` requires `--dry-run` or `--mirror`; `--yes` is
+only meaningful with `--mirror`, `--clean`, or `--self-update`. A normal pull and
+`--delete` limit deletion to files lanpull delivered earlier, recorded in
+`state.json`; files you created in the mirror folder are never touched. Only
+`--mirror` deletes those files too, which is what makes the destination an exact
+copy of the share.
 
 ## Configuration
 
@@ -746,7 +754,7 @@ and no git hook**; the gates are run deliberately with `make ci`.
 | `ERROR: server has no manifest; ask the operator to run 'lanpull share rescan'` | Run `lanpull share rescan` on the server. |
 | `ERROR: no credentials in <client-folder>/auth` | The staged `auth` file is missing; re-export the account folder. |
 | `ERROR: share not configured: <share>` | The client's `lanpull.conf` has no `MIRROR_<share>` entry for that share. |
-| Stale files are not removed | Deletion is limited to files lanpull delivered earlier; answer the prompt or use `--delete`. |
+| Stale files are not removed | A normal pull deletes only files lanpull delivered earlier; answer the prompt, use `--delete`, or use `--mirror` to make the destination an exact copy of the share. |
 | `ERROR: another pull is already running` | A second pull for the same destination was refused by the lock file. |
 | `lanpull status` warns the manifest is stale | Files in the share are newer than the manifest; run `lanpull share rescan`. |
 | `lanpull access doctor` warns a listed path is missing | The policy names a file that is not in the share; add it or remove the rule. |

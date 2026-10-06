@@ -359,9 +359,12 @@ def _clean_options(**overrides: object) -> pull.Options:
         "check": False,
         "dry_run": False,
         "delete": False,
+        "mirror": False,
         "self_update": False,
         "clean": True,
         "yes": False,
+        "all": False,
+        "quiet": False,
     }
     values.update(overrides)
     return pull.Options(**values)  # type: ignore[arg-type]
@@ -510,9 +513,12 @@ def _options(**overrides: object) -> pull.Options:
         "check": False,
         "dry_run": False,
         "delete": False,
+        "mirror": False,
         "self_update": False,
         "clean": False,
         "yes": False,
+        "all": False,
+        "quiet": False,
     }
     values.update(overrides)
     return pull.Options(**values)  # type: ignore[arg-type]
@@ -567,8 +573,10 @@ def test_dry_run_prints_the_plan_and_changes_nothing(
     conf = {"MIRROR_reports": str(mirror)}
     assert pull.run_pull(tmp_path, client, conf, _options(dry_run=True)) == 0
     text = capsys.readouterr().out
-    assert "NEED: a.txt" in text
-    assert "planned: 1 need, 0 verify, 0 stale" in text
+    assert "ACTION" in text
+    assert "NEED" in text
+    assert "a.txt" in text
+    assert "planned: 1 need, 0 verify, 0 stale, 0 extra" in text
     assert not (mirror / "a.txt").exists()
     assert not (tmp_path / "state.json").exists()
 
@@ -583,7 +591,9 @@ def test_dry_run_lists_stale_without_deleting(
     client = cast("pull.HttpClient", _ManifestClient({"reports": _manifest([])}))
     conf = {"MIRROR_reports": str(mirror)}
     assert pull.run_pull(tmp_path, client, conf, _options(dry_run=True)) == 0
-    assert "STALE: gone.txt" in capsys.readouterr().out
+    text = capsys.readouterr().out
+    assert "STALE" in text
+    assert "gone.txt" in text
     assert (mirror / "gone.txt").exists()
     assert pull.load_state(tmp_path / "state.json") == {"reports": {"gone.txt"}}
 
@@ -600,6 +610,113 @@ def test_delete_removes_only_tracked_stale(tmp_path: Path) -> None:
     assert not (mirror / "gone.txt").exists()
     assert (mirror / "mine.txt").exists()
     assert pull.load_state(tmp_path / "state.json") == {"reports": set()}
+
+
+def test_format_rows_pads_all_but_last() -> None:
+    assert pull.format_rows([["A", "B"], ["long", "c"]]) == ["A     B", "long  c"]
+    assert pull.format_rows([]) == []
+
+
+def test_render_changes_caps_and_all() -> None:
+    planned = [pull.Planned(pull.Entry(f"f{i}.txt", 1, 1.0, "x"), pull.NEED) for i in range(60)]
+    capped = pull.render_changes(planned, [], [], show_all=False)
+    assert len(capped) == 52
+    assert "and 10 more" in capped[-1]
+    full = pull.render_changes(planned, [], [], show_all=True)
+    assert len(full) == 61
+    assert pull.render_changes([], [], [], show_all=True) == []
+
+
+def test_scan_extras_finds_files_and_symlinks(tmp_path: Path) -> None:
+    mirror = tmp_path / "mirror"
+    (mirror / "sub").mkdir(parents=True)
+    (mirror / "sub" / "extra.txt").write_text("x", encoding="utf-8")
+    (mirror / "keep.txt").write_text("k", encoding="utf-8")
+    (mirror / ".lanpull.partials.json").write_text("{}", encoding="utf-8")
+    (mirror / "a.part").write_text("half", encoding="utf-8")
+    (mirror / "link").symlink_to(mirror / "keep.txt")
+    assert pull.scan_extras(mirror, {"keep.txt"}) == ["link", "sub/extra.txt"]
+
+
+def test_remove_empty_dirs(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    (root / "a" / "b").mkdir(parents=True)
+    (root / "a" / "keep").mkdir()
+    (root / "a" / "keep" / "f.txt").write_text("x", encoding="utf-8")
+    assert pull.remove_empty_dirs(root) == 1
+    assert not (root / "a" / "b").exists()
+    assert (root / "a").exists()
+
+
+def test_mirror_deletes_extras_and_empty_dirs(tmp_path: Path) -> None:
+    mirror = tmp_path / "mirror"
+    (mirror / "junk").mkdir(parents=True)
+    (mirror / "keep.txt").write_bytes(b"data")
+    os.utime(mirror / "keep.txt", (1, 1))
+    (mirror / "operator.txt").write_text("mine", encoding="utf-8")
+    (mirror / "junk" / "x.txt").write_text("x", encoding="utf-8")
+    pull.save_state(tmp_path / "state.json", {"reports": {"operator.txt"}})
+    client = cast(
+        "pull.HttpClient", _ManifestClient({"reports": _manifest([("keep.txt", b"data")])})
+    )
+    conf = {"MIRROR_reports": str(mirror)}
+    assert pull.run_pull(tmp_path, client, conf, _options(mirror=True, yes=True)) == 0
+    assert (mirror / "keep.txt").exists()
+    assert not (mirror / "operator.txt").exists()
+    assert not (mirror / "junk").exists()
+    assert (mirror / ".lanpull.lock").exists()
+    assert pull.load_state(tmp_path / "state.json") == {"reports": {"keep.txt"}}
+
+
+def test_mirror_prompt_declined_keeps_extras(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mirror = tmp_path / "mirror"
+    mirror.mkdir()
+    (mirror / "operator.txt").write_text("mine", encoding="utf-8")
+    client = cast("pull.HttpClient", _ManifestClient({"reports": _manifest([])}))
+    conf = {"MIRROR_reports": str(mirror)}
+    monkeypatch.setattr("builtins.input", lambda: "n")
+    assert pull.run_pull(tmp_path, client, conf, _options(mirror=True)) == 0
+    assert (mirror / "operator.txt").exists()
+
+
+def test_mirror_dry_run_lists_extras_without_deleting(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    mirror = tmp_path / "mirror"
+    mirror.mkdir()
+    (mirror / "operator.txt").write_text("mine", encoding="utf-8")
+    client = cast("pull.HttpClient", _ManifestClient({"reports": _manifest([])}))
+    conf = {"MIRROR_reports": str(mirror)}
+    assert pull.run_pull(tmp_path, client, conf, _options(mirror=True, dry_run=True)) == 0
+    text = capsys.readouterr().out
+    assert "EXTRA" in text
+    assert "operator.txt" in text
+    assert (mirror / "operator.txt").exists()
+
+
+def test_parse_args_mode_and_modifier_conflicts() -> None:
+    for argv in (
+        ["--mirror", "--check"],
+        ["--mirror", "--self-update"],
+        ["--mirror", "--clean"],
+        ["--delete", "--mirror"],
+        ["--delete", "--dry-run"],
+        ["--all"],
+        ["--all", "--check"],
+        ["--yes"],
+        ["--yes", "--dry-run"],
+        ["--dry-run", "--check"],
+        ["--dry-run", "--self-update"],
+        ["--self-update", "reports"],
+    ):
+        with pytest.raises(SystemExit):
+            pull.parse_args(argv)
+    options = pull.parse_args(["--mirror", "--dry-run", "--all", "--yes", "reports"])
+    assert options.mirror and options.dry_run and options.all and options.yes
+    assert options.share == "reports"
+    assert pull.parse_args(["--quiet"]).quiet
 
 
 def test_load_state_tolerates_corrupt_and_partial(tmp_path: Path) -> None:
