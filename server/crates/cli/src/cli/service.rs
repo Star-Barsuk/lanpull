@@ -5,6 +5,8 @@ use std::process::Command;
 use clap::Subcommand;
 use lanpull_core::error::{Error, Result};
 
+use crate::cli::Outcome;
+
 /// The systemd unit name.
 const SERVICE: &str = "lanpull.service";
 
@@ -37,31 +39,50 @@ impl ServiceCommand {
 }
 
 /// Dispatch a service operation.
-pub fn run(command: ServiceCommand) -> Result<()> {
+pub fn run(command: ServiceCommand) -> Result<Outcome> {
     match command {
-        ServiceCommand::Start => systemctl(&["start", SERVICE], false),
-        ServiceCommand::Stop => systemctl(&["stop", SERVICE], false),
-        ServiceCommand::Restart => systemctl(&["restart", SERVICE], false),
-        ServiceCommand::Status => systemctl(&["--no-pager", "status", SERVICE], true),
-        ServiceCommand::Logs => systemctl(&["-u", SERVICE, "-f"], true),
+        ServiceCommand::Start => control("start", "started"),
+        ServiceCommand::Stop => control("stop", "stopped"),
+        ServiceCommand::Restart => control("restart", "restarted"),
+        ServiceCommand::Status => stream(&["--no-pager", "status", SERVICE]),
+        ServiceCommand::Logs => stream(&["-u", SERVICE, "-f"]),
     }
 }
 
-/// Run `systemctl` with `args`, inheriting stdio.
+/// Run a mutating systemctl verb, capturing its output and reporting one line.
+fn control(verb: &str, past: &str) -> Result<Outcome> {
+    let output = Command::new("systemctl")
+        .arg(verb)
+        .arg(SERVICE)
+        .output()
+        .map_err(|e| Error::Server(format!("could not run systemctl: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Error::Server(format!(
+            "systemctl {verb} {SERVICE} failed: {}",
+            stderr.trim()
+        )));
+    }
+    Ok(Outcome::new()
+        .line(format!("service {SERVICE} {past}"))
+        .with_data(&serde_json::json!({ "service": SERVICE, "action": verb })))
+}
+
+/// Run a read-only systemctl verb, forwarding its output to the terminal.
 ///
-/// `allow_failure` is used for `status`/`logs`: an inactive unit makes
-/// `systemctl status` exit non-zero, which is still a useful result.
-fn systemctl(args: &[&str], allow_failure: bool) -> Result<()> {
+/// `status` and `logs` are pass-through: their human output *is* the result, so
+/// they write straight to the inherited stdio and return an empty outcome
+/// instead of buffering it. This is the documented exception to the `--json`
+/// envelope contract.
+fn stream(args: &[&str]) -> Result<Outcome> {
     let status = Command::new("systemctl")
         .args(args)
         .status()
         .map_err(|e| Error::Server(format!("could not run systemctl: {e}")))?;
-    if allow_failure || status.success() {
-        Ok(())
-    } else {
-        Err(Error::Server(format!(
-            "systemctl {} failed with {status}",
-            args.join(" ")
-        )))
+    if !status.success() {
+        // `systemctl status` exits non-zero for an inactive unit; that is a
+        // useful result, not a failure.
+        tracing::debug!("systemctl {} exited with {status}", args.join(" "));
     }
+    Ok(Outcome::new().with_data(&serde_json::json!({ "service": SERVICE })))
 }

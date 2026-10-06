@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
-use lanpull_core::config::Config;
+use lanpull_core::config::{Config, SHARE_NAME_PATTERN};
 use lanpull_core::error::{Error, Result};
 use serde::Serialize;
 
@@ -78,9 +78,6 @@ pub struct InitArgs {
     /// Address clients use (embedded in the certificate).
     #[arg(long)]
     pub server_ip: Option<String>,
-    /// Accept the detected values without prompting.
-    #[arg(long)]
-    pub yes: bool,
     /// Overwrite an existing configuration file.
     #[arg(long)]
     pub force: bool,
@@ -127,7 +124,7 @@ fn rescan(config_path: &Path) -> Result<Outcome> {
     let mut outcome = Outcome::new();
     report_regeneration(&config, &mut outcome)?;
     if outcome.lines.is_empty() {
-        outcome.lines.push("manifest regenerated".to_string());
+        outcome.lines.push("manifests regenerated".to_string());
     }
     Ok(outcome)
 }
@@ -139,8 +136,8 @@ fn add(config_path: &Path, name: &str, dir: &Path, dry_run: bool) -> Result<Outc
         return Err(Error::Config(format!("share {name} already exists")));
     }
     if !lanpull_core::config::valid_share_name(name) {
-        return Err(Error::Config(format!(
-            "invalid share name {name}: must match ^[a-z0-9][a-z0-9_-]*$"
+        return Err(Error::Usage(format!(
+            "invalid share name {name}: must match {SHARE_NAME_PATTERN}"
         )));
     }
     if !dir.is_dir() {

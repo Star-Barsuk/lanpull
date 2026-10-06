@@ -212,13 +212,22 @@ pub fn newest_mtime(share: &Path) -> Result<Option<i64>> {
     Ok(if found { Some(newest) } else { None })
 }
 
+/// Seconds in a minute.
+const SECS_PER_MINUTE: i64 = 60;
+/// Seconds in an hour.
+const SECS_PER_HOUR: i64 = 3600;
+
 /// Format a remaining duration compactly.
 pub fn format_duration(seconds: i64) -> String {
-    if seconds < 60 {
+    if seconds < SECS_PER_MINUTE {
         format!("{seconds}s")
-    } else if seconds < 3600 {
-        format!("{}m", seconds / 60)
+    } else if seconds < SECS_PER_HOUR {
+        format!("{}m", seconds / SECS_PER_MINUTE)
     } else {
-        format!("{}h{}m", seconds / 3600, (seconds % 3600) / 60)
+        format!(
+            "{}h{}m",
+            seconds / SECS_PER_HOUR,
+            (seconds % SECS_PER_HOUR) / SECS_PER_MINUTE
+        )
     }
 }

@@ -283,7 +283,7 @@ fn arm_window_expires() {
     assert!(state.is_armed("alpha", 999));
     assert!(!state.is_armed("alpha", 1000));
     assert_eq!(state.armed_entries(940), vec![("alpha".to_string(), 60)]);
-    assert!(state.armed_entries(1000).is_empty());
+    assert_eq!(state.armed_entries(1000), Vec::<(String, i64)>::new());
 }
 
 #[test]

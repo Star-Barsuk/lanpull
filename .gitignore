@@ -36,6 +36,7 @@ htmlcov/
 # --- lanpull runtime artifacts (if run inside the repository) -------------
 *.part
 *.tmp
+*.tmp.*
 .lanpull.lock
 .lanpull.shares
 state.json

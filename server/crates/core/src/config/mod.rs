@@ -30,8 +30,14 @@ pub const DEFAULT_PORT: u16 = 8000;
 pub const DEFAULT_CLIENTS_PATH: &str = "lanpull.clients";
 /// The default access policy location, resolved relative to the config file.
 pub const DEFAULT_ACCESS_PATH: &str = "lanpull.access.json";
+/// The default certificate file name inside the state directory.
+pub const CERT_FILE_NAME: &str = "server.crt";
+/// The default private-key file name inside the state directory.
+pub const KEY_FILE_NAME: &str = "server.key";
+/// The pattern a valid share name must match.
+pub const SHARE_NAME_PATTERN: &str = "^[a-z0-9][a-z0-9_-]*$";
 /// The prefix a share key uses.
-const SHARE_PREFIX: &str = "SHARE_";
+const SHARE_KEY_PREFIX: &str = "SHARE_";
 
 /// Return `true` when `name` is a valid share name.
 pub fn valid_share_name(name: &str) -> bool {
@@ -210,9 +216,9 @@ impl Config {
         };
 
         let cert_path =
-            optional_path(map, "CERT_PATH").unwrap_or_else(|| state_dir.join("server.crt"));
+            optional_path(map, "CERT_PATH").unwrap_or_else(|| state_dir.join(CERT_FILE_NAME));
         let key_path =
-            optional_path(map, "KEY_PATH").unwrap_or_else(|| state_dir.join("server.key"));
+            optional_path(map, "KEY_PATH").unwrap_or_else(|| state_dir.join(KEY_FILE_NAME));
         let clients_path = optional_path(map, "CLIENTS_PATH")
             .unwrap_or_else(|| PathBuf::from(DEFAULT_CLIENTS_PATH));
         let access_path =
@@ -276,12 +282,12 @@ impl Config {
 fn parse_shares(map: &BTreeMap<String, String>) -> Result<BTreeMap<String, PathBuf>> {
     let mut shares = BTreeMap::new();
     for (key, value) in map {
-        let Some(name) = key.strip_prefix(SHARE_PREFIX) else {
+        let Some(name) = key.strip_prefix(SHARE_KEY_PREFIX) else {
             continue;
         };
         if !valid_share_name(name) {
             return Err(Error::Config(format!(
-                "invalid share name in key {key}: must match ^[a-z0-9][a-z0-9_-]*$"
+                "invalid share name in key {key}: must match {SHARE_NAME_PATTERN}"
             )));
         }
         if value.is_empty() {

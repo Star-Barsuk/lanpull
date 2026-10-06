@@ -75,8 +75,16 @@ pub fn run(config_path: &Path, args: &InitArgs) -> Result<Outcome> {
     let _ = writeln!(text, "BIND={bind}");
     let _ = writeln!(text, "PORT={port}");
     let _ = writeln!(text, "SERVER_IP={server_ip}");
-    let _ = writeln!(text, "CERT_PATH={}", state_dir.join("server.crt").display());
-    let _ = writeln!(text, "KEY_PATH={}", state_dir.join("server.key").display());
+    let _ = writeln!(
+        text,
+        "CERT_PATH={}",
+        state_dir.join(core_config::CERT_FILE_NAME).display()
+    );
+    let _ = writeln!(
+        text,
+        "KEY_PATH={}",
+        state_dir.join(core_config::KEY_FILE_NAME).display()
+    );
     text.push_str("CLIENTS_PATH=lanpull.clients\n");
     text.push_str("ACCESS_PATH=lanpull.access.json\n");
     let _ = writeln!(text, "AUDIT_LOG={}", state_dir.join("access.log").display());
@@ -158,7 +166,8 @@ fn resolve_shares(specs: &[String]) -> Result<Vec<(String, PathBuf)>> {
             .ok_or_else(|| Error::Usage(format!("invalid --share {spec}: expected name=path")))?;
         if !core_config::valid_share_name(name) {
             return Err(Error::Usage(format!(
-                "invalid share name {name}: must match ^[a-z0-9][a-z0-9_-]*$"
+                "invalid share name {name}: must match {}",
+                core_config::SHARE_NAME_PATTERN
             )));
         }
         shares.push((name.to_string(), PathBuf::from(path)));

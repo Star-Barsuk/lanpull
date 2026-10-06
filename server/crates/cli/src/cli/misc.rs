@@ -17,7 +17,7 @@ use crate::cli::Outcome;
 pub struct ReportArgs {
     /// Only show one account.
     #[arg(long)]
-    pub user: Option<String>,
+    pub account: Option<String>,
     /// Only show requests newer than this duration, for example `7d`.
     #[arg(long)]
     pub since: Option<String>,
@@ -56,7 +56,7 @@ pub fn report(config_path: &Path, args: ReportArgs) -> Result<Outcome> {
         }
         None => None,
     };
-    let summary = audit::summarize(&config.audit_log, args.user.as_deref(), cutoff)?;
+    let summary = audit::summarize(&config.audit_log, args.account.as_deref(), cutoff)?;
     let lines = summary.lines();
     Ok(Outcome::text(lines).with_data(&summary))
 }

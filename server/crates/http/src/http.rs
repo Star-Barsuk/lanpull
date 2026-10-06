@@ -46,6 +46,12 @@ const MAX_HOST_LEN: usize = 255;
 const REASON_HEADER: &str = "x-lanpull-reason";
 /// Advisory client hostname header.
 const HOST_HEADER: &str = "x-lanpull-host";
+/// A syntactically valid argon2id PHC hash used to equalize the work of an
+/// unknown-account check. It never matches a real password; `verify_password`
+/// still runs the full argon2 routine, so the timing is independent of whether
+/// the account exists.
+const DUMMY_PASSWORD_HASH: &str =
+    "$argon2id$v=19$m=19456,t=2,p=1$rn66er0ZraW8U6cAQFyp0w$ERZFdPrADf5JiG8ZH21LS6xGMhWXf+9XlSqwkLQFnUU";
 
 /// Shared server state.
 ///
@@ -72,7 +78,7 @@ impl AppState {
             config: Arc::new(config),
             live: Arc::new(LiveCache::new()),
             throttle: Arc::new(Throttle::new()),
-            dummy_hash: clients::hash_password(&clients::generate_password()).unwrap_or_default(),
+            dummy_hash: DUMMY_PASSWORD_HASH.to_string(),
         }
     }
 }
@@ -214,7 +220,7 @@ fn authenticate(
     let clients = match state.live.clients(&state.config.clients_path) {
         Ok(clients) => clients,
         Err(e) => {
-            tracing::warn!("cannot read account file: {e}");
+            tracing::warn!(error = %e, "cannot read account file");
             return Err(Failure {
                 user,
                 reason: "unknown_user".to_string(),
@@ -255,7 +261,7 @@ fn authenticate(
         let armed = match state.live.arm(&state.config.arm_path()) {
             Ok(arm) => arm.is_armed(&account.name, timeutil::now_unix()),
             Err(e) => {
-                tracing::warn!("cannot read arm state: {e}");
+                tracing::warn!(error = %e, "cannot read arm state");
                 false
             }
         };
@@ -273,7 +279,7 @@ fn authenticate(
 /// Append an audit record, logging (but not failing) on error.
 fn write_audit(state: &AppState, record: &Record) {
     if let Err(e) = audit::append(&state.config.audit_log, record) {
-        tracing::warn!("cannot write audit log: {e}");
+        tracing::warn!(error = %e, "cannot write audit log");
     }
 }
 
@@ -292,7 +298,7 @@ async fn serve_share_manifest(
         Ok(access) if access.allows_share(&user.0, &share) => {}
         Ok(_) => return forbidden(),
         Err(e) => {
-            tracing::warn!("cannot read access policy: {e}");
+            tracing::warn!(error = %e, "cannot read access policy");
             return forbidden();
         }
     }
@@ -324,7 +330,7 @@ async fn serve_share_file(
         Ok(access) if access.allows(&user.0, &share, &path) => {}
         Ok(_) => return forbidden(),
         Err(e) => {
-            tracing::warn!("cannot read access policy: {e}");
+            tracing::warn!(error = %e, "cannot read access policy");
             return forbidden();
         }
     }
@@ -352,6 +358,8 @@ async fn serve_share_file(
     // re-open a different inode; the descriptor stays open for the transfer.
     let proc_path = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
     let response = serve_file(proc_path, method, headers).await;
+    // `ServeFile` opens the `/proc/self/fd/N` path while building the response,
+    // so the descriptor may be closed only after it has done so.
     drop(file);
     response
 }
@@ -438,6 +446,7 @@ fn json_response<T: serde::Serialize>(value: &T) -> Response {
         Ok(bytes) => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "application/json")
+            .header(header::CONTENT_LENGTH, bytes.len().to_string())
             .body(Body::from(bytes))
             .unwrap_or_else(|_| Response::new(Body::empty())),
         Err(e) => text_response(

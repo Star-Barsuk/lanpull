@@ -10,14 +10,17 @@ use crate::error::{Error, Result};
 
 /// Generate a self-signed certificate and key with `SAN = IP:<server_ip>`.
 ///
-/// The certificate is written world-readable; the key is written mode `0600`.
-/// It carries `basicConstraints CA:TRUE` so OpenSSL (and therefore Python's
-/// `ssl` module) accepts it as a pinned trust anchor while it is also the
-/// server certificate. Returns the certificate and key paths.
-pub fn generate(state_dir: &Path, server_ip: IpAddr) -> Result<(PathBuf, PathBuf)> {
-    let cert_path = state_dir.join("server.crt");
-    let key_path = state_dir.join("server.key");
-
+/// The certificate and key are written to `cert_path` and `key_path` (their
+/// parent directories are created as needed). The certificate is written
+/// world-readable; the key is written mode `0600`. It carries
+/// `basicConstraints CA:TRUE` so OpenSSL (and therefore Python's `ssl` module)
+/// accepts it as a pinned trust anchor while it is also the server certificate.
+/// Returns the certificate and key paths.
+pub fn generate(
+    cert_path: &Path,
+    key_path: &Path,
+    server_ip: IpAddr,
+) -> Result<(PathBuf, PathBuf)> {
     let mut params = CertificateParams::default();
     params
         .distinguished_name
@@ -45,9 +48,14 @@ pub fn generate(state_dir: &Path, server_ip: IpAddr) -> Result<(PathBuf, PathBuf
     let cert_pem = certificate.pem();
     let key_pem = key_pair.serialize_pem();
 
-    fs::create_dir_all(state_dir)?;
-    crate::atomic::write(&cert_path, cert_pem.as_bytes())?;
-    crate::atomic::write_private(&key_path, key_pem.as_bytes())?;
+    if let Some(parent) = cert_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if let Some(parent) = key_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    crate::atomic::write(cert_path, cert_pem.as_bytes())?;
+    crate::atomic::write_private(key_path, key_pem.as_bytes())?;
 
-    Ok((cert_path, key_path))
+    Ok((cert_path.to_path_buf(), key_path.to_path_buf()))
 }

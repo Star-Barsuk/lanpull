@@ -173,7 +173,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("arm.json");
         let cache = LiveCache::new();
-        assert!(cache.arm(&path).unwrap().armed_entries(0).is_empty());
+        assert_eq!(
+            cache.arm(&path).unwrap().armed_entries(0),
+            Vec::<(String, i64)>::new()
+        );
         assert!(Arc::ptr_eq(
             &cache.arm(&path).unwrap(),
             &cache.arm(&path).unwrap()

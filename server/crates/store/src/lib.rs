@@ -10,5 +10,3 @@ pub mod cache;
 pub mod ignore;
 pub mod manifest;
 pub mod status;
-
-pub use lanpull_core as core;

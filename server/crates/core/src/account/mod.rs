@@ -330,13 +330,12 @@ fn stage(
     std::fs::copy(pull_source, staging.join("pull.py"))?;
     set_executable(&staging.join("pull.py"))?;
 
-    std::fs::write(
-        staging.join("lanpull.conf"),
-        client_conf(config, name, output, access)?,
-    )?;
+    let conf = client_conf(config, name, output, access)?;
+    crate::atomic::write(&staging.join("lanpull.conf"), conf.as_bytes())?;
     let auth = format!("{name}:{password}\n");
     crate::atomic::write_private(&staging.join("auth"), auth.as_bytes())?;
     std::fs::copy(&config.cert_path, staging.join("server.crt"))?;
+    apply_modes(staging)?;
     Ok(())
 }
 
@@ -344,20 +343,20 @@ fn stage(
 fn rollback(config: &Config, name: &str, staging: &Path) {
     if let Err(e) = std::fs::remove_dir_all(staging) {
         if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!("could not remove staging {}: {e}", staging.display());
+            tracing::warn!(staging = %staging.display(), error = %e, "could not remove staging");
         }
     }
 
     let mut accounts = match Clients::load(&config.clients_path) {
         Ok(accounts) => accounts,
         Err(e) => {
-            tracing::warn!("could not roll back account {name}: {e}");
+            tracing::warn!(account = name, error = %e, "could not roll back account");
             return;
         }
     };
     if accounts.remove(name) {
         if let Err(e) = accounts.save(&config.clients_path) {
-            tracing::warn!("could not roll back account {name}: {e}");
+            tracing::warn!(account = name, error = %e, "could not roll back account");
         }
     }
 }

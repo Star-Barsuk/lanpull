@@ -13,13 +13,13 @@ use crate::error::Result;
 use crate::timeutil;
 
 /// The path prefix shared by every share-scoped route.
-const SHARE_PREFIX: &str = "/_lanpull/share/";
+const SHARE_ROUTE_PREFIX: &str = "/_lanpull/share/";
 /// The marker that separates a share from its file path.
 const FILE_MARKER: &str = "/file/";
 
 /// Return `true` for a share data-file download (`/_lanpull/share/<share>/file/<path>`).
 fn is_data_file(path: &str) -> bool {
-    path.starts_with(SHARE_PREFIX) && path.contains(FILE_MARKER)
+    path.starts_with(SHARE_ROUTE_PREFIX) && path.contains(FILE_MARKER)
 }
 
 /// One audit log record.
@@ -134,7 +134,7 @@ pub fn summarize(
         let record: Record = match serde_json::from_str(&line) {
             Ok(record) => record,
             Err(e) => {
-                tracing::warn!("skipping malformed audit line: {e}");
+                tracing::warn!(error = %e, "skipping malformed audit line");
                 continue;
             }
         };

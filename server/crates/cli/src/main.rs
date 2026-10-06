@@ -25,21 +25,21 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use lanpull_core::config as core_config;
-use lanpull_core::error::Result;
+use lanpull_core::error::{Error, Result};
 
 use crate::cli::{emit, emit_error, Cli, Command};
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let parsed = Cli::parse();
+    let parsed = parse_cli();
     let json = parsed.json;
     let command = parsed.command.path();
     if let Err(e) = init_tracing(parsed.verbose, parsed.quiet) {
-        eprintln!("error: {e}");
-        return ExitCode::from(lanpull_core::error::exit::FAILURE);
+        emit_error(command, &e, json);
+        return ExitCode::from(e.exit_code());
     }
     match run(parsed).await {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => ExitCode::from(lanpull_core::error::exit::OK),
         Err(e) => {
             emit_error(command, &e, json);
             ExitCode::from(e.exit_code())
@@ -47,8 +47,35 @@ async fn main() -> ExitCode {
     }
 }
 
+/// Parse the command line, rendering clap errors through the output layer.
+///
+/// `--help`/`--version` are printed as usual and exit `0`; any other parse
+/// failure becomes a usage error, wrapped in the JSON envelope when `--json`
+/// was requested (clap has not parsed it yet, so the raw arguments are
+/// scanned).
+fn parse_cli() -> Cli {
+    match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            use clap::error::ErrorKind;
+            if matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) {
+                let _ = e.print();
+                std::process::exit(0);
+            }
+            let json = std::env::args_os().any(|arg| arg == "--json");
+            // clap's message already begins with "error: "; drop it so the
+            // output layer adds exactly one prefix.
+            let rendered = e.to_string();
+            let message = rendered.strip_prefix("error: ").unwrap_or(&rendered);
+            let error = Error::Usage(message.trim_end().to_string());
+            emit_error("", &error, json);
+            std::process::exit(i32::from(lanpull_core::error::exit::USAGE));
+        }
+    }
+}
+
 /// Install a tracing subscriber: diagnostics to stderr, data to stdout.
-fn init_tracing(verbose: u8, quiet: bool) -> std::result::Result<(), String> {
+fn init_tracing(verbose: u8, quiet: bool) -> Result<()> {
     use tracing_subscriber::EnvFilter;
     let filter = if quiet || verbose > 0 {
         let level = match (quiet, verbose) {
@@ -62,11 +89,10 @@ fn init_tracing(verbose: u8, quiet: bool) -> std::result::Result<(), String> {
     };
     let subscriber = tracing_subscriber::fmt()
         .with_target(false)
-        .without_time()
         .with_writer(std::io::stderr)
         .with_env_filter(filter);
     tracing::subscriber::set_global_default(subscriber.finish())
-        .map_err(|e| format!("could not install the logger: {e}"))
+        .map_err(|e| Error::Server(format!("could not install the logger: {e}")))
 }
 
 /// Dispatch a parsed command.
@@ -98,7 +124,7 @@ async fn run(cli: Cli) -> Result<()> {
             emit(command, cli::access::run(&config_path, sub)?, json)
         }
         Command::Share { command: sub } => emit(command, cli::share::run(&config_path, sub)?, json),
-        Command::Service { command: sub } => cli::service::run(sub),
+        Command::Service { command: sub } => emit(command, cli::service::run(sub)?, json),
         Command::Config { command: sub } => {
             emit(command, cli::config::run(&config_path, sub)?, json)
         }
@@ -122,12 +148,13 @@ fn resolve_init_path(explicit: Option<PathBuf>) -> PathBuf {
 fn cert(config_path: &std::path::Path, force: bool) -> Result<cli::Outcome> {
     let config = lanpull_core::config::Config::load(config_path)?;
     if !force && (config.cert_path.exists() || config.key_path.exists()) {
-        return Err(lanpull_core::error::Error::Usage(format!(
+        return Err(Error::Usage(format!(
             "certificate already exists at {}; pass --force to regenerate",
             config.cert_path.display()
         )));
     }
-    let (cert_path, key_path) = lanpull_core::cert::generate(&config.state_dir, config.server_ip)?;
+    let (cert_path, key_path) =
+        lanpull_core::cert::generate(&config.cert_path, &config.key_path, config.server_ip)?;
     Ok(cli::Outcome::new()
         .line(format!("certificate written to {}", cert_path.display()))
         .line(format!("key written to {} (mode 600)", key_path.display()))
