@@ -8,7 +8,11 @@ config/lanpull.clients
 config/lanpull.access.json
 
 # --- Internal development documents (not distributed) ---------------------
-docs/
+# Public exceptions: docs/CONTRIBUTING.md, docs/SECURITY.md, docs/REFERENCE.md.
+docs/*
+!docs/CONTRIBUTING.md
+!docs/SECURITY.md
+!docs/REFERENCE.md
 
 # --- Private operator tooling (not committed) -----------------------------
 tools/
