@@ -105,6 +105,7 @@ fn journal_since(value: &str) -> String {
 }
 
 /// Run a mutating systemctl verb, capturing its output and reporting one line.
+#[allow(clippy::disallowed_methods)] // the CLI is the one crate that may spawn `systemctl`
 fn control(verb: &str, past: &str) -> Result<Outcome> {
     let output = Command::new("systemctl")
         .arg(verb)
@@ -129,6 +130,7 @@ fn control(verb: &str, past: &str) -> Result<Outcome> {
 /// they write straight to the inherited stdio and return an empty outcome
 /// instead of buffering it. This is the documented exception to the `--json`
 /// envelope contract.
+#[allow(clippy::disallowed_methods)] // the CLI is the one crate that may spawn `systemctl`
 fn stream(args: &[String]) -> Result<Outcome> {
     let status = Command::new("systemctl")
         .args(args)

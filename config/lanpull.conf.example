@@ -33,9 +33,9 @@ KEY_PATH=/var/lib/lanpull/server.key
 # address on the LAN (access is then gated by the password and the arm window).
 # A trailing "local" marks a self-share account, exempt from the arm window;
 # without an IP it is written with an empty field, e.g. "user:hash::local".
-# Managed by `lanpull account
-# add` / `remove` / `passwd`; mode 600; never committed. Authentication is
-# mandatory, so the server refuses to start when this file is missing or empty.
+# Managed by `lanpull account add` / `remove` / `passwd`; mode 600; never
+# committed. Authentication is mandatory, so the server refuses to start when
+# this file is missing or empty.
 # Relative paths are resolved against the directory of this config file.
 CLIENTS_PATH=lanpull.clients
 

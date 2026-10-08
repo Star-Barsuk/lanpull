@@ -22,22 +22,20 @@ pub fn run(config_path: &Path, args: &InitArgs) -> Result<Outcome> {
     use std::fmt::Write as _;
 
     let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
+    let canonical = config_dir == Path::new(core_config::DEFAULT_CONFIG_DIR);
 
     // The canonical configuration needs root: it is created root-owned with the
     // operator group. Refuse before touching the filesystem so a normal user
     // gets an actionable message instead of a raw permission error. A dry run
     // writes nothing and may run as anyone.
-    if !args.dry_run
-        && config_dir == Path::new(core_config::DEFAULT_CONFIG_DIR)
-        && effective_uid() != 0
-    {
+    if !args.dry_run && canonical && effective_uid() != 0 {
         return Err(Error::Usage(format!(
             "{} needs root; run 'sudo lanpull init'",
             config_dir.display()
         )));
     }
 
-    let shares = resolve_shares(&args.shares)?;
+    let shares = resolve_shares(&args.shares, canonical)?;
     let state_dir = args
         .state_dir
         .clone()
@@ -241,13 +239,19 @@ pub fn effective_uid() -> u32 {
 }
 
 /// Parse `name=path` share specifications, defaulting to a single `default`.
-fn resolve_shares(specs: &[String]) -> Result<Vec<(String, PathBuf)>> {
+///
+/// The canonical configuration defaults to `/srv/lanpull/share` (the documented
+/// layout); a development configuration defaults to `$HOME/lanpull-share` so it
+/// can be created without root.
+fn resolve_shares(specs: &[String], canonical: bool) -> Result<Vec<(String, PathBuf)>> {
     if specs.is_empty() {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/home".to_string());
-        return Ok(vec![(
-            "default".to_string(),
-            PathBuf::from(home).join("lanpull-share"),
-        )]);
+        let default = if canonical {
+            PathBuf::from("/srv/lanpull/share")
+        } else {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/home".to_string());
+            PathBuf::from(home).join("lanpull-share")
+        };
+        return Ok(vec![("default".to_string(), default)]);
     }
     let mut shares = Vec::new();
     for spec in specs {
@@ -292,6 +296,7 @@ fn create_state_dir(state_dir: &Path) -> Result<()> {
 }
 
 /// Detect the host's private LAN address from the main routing table.
+#[allow(clippy::disallowed_methods)] // the CLI may run `ip`; the server crates may not
 fn detect_server_ip() -> Result<IpAddr> {
     let output = std::process::Command::new("ip")
         .args(["-4", "route", "show", "default"])

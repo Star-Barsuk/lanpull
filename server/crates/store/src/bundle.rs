@@ -32,14 +32,16 @@ pub struct BundleManifest {
     pub files: Vec<BundleFile>,
 }
 
+/// The error for a missing or empty client bundle.
+fn missing() -> Error {
+    Error::Server(
+        "server has no client bundle; ask the operator to reinstall or run 'make client-bundle'"
+            .to_string(),
+    )
+}
+
 /// Build the bundle manifest from a staged client directory.
 pub fn build(client_dir: &Path) -> Result<BundleManifest> {
-    let missing = || {
-        Error::Server(
-            "server has no client bundle; ask the operator to reinstall or run 'make client-bundle'".to_string(),
-        )
-    };
-
     let version = fs::read_to_string(client_dir.join("VERSION"))
         .map_err(|_| missing())?
         .trim()
@@ -70,6 +72,35 @@ pub fn build(client_dir: &Path) -> Result<BundleManifest> {
 
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(BundleManifest { version, files })
+}
+
+/// Return the sorted names of the regular files in a staged client bundle.
+///
+/// Cheaper than [`build`] for the per-file route: it lists names without
+/// hashing file contents, while enforcing the same "bundle present"
+/// precondition (a non-empty `VERSION` and at least one file). The name set is
+/// identical to [`build`]'s, so membership checks stay equivalent.
+pub fn names(client_dir: &Path) -> Result<Vec<String>> {
+    if fs::read_to_string(client_dir.join("VERSION"))
+        .map_err(|_| missing())?
+        .trim()
+        .is_empty()
+    {
+        return Err(missing());
+    }
+
+    let mut names: Vec<String> = Vec::new();
+    for entry in fs::read_dir(client_dir)? {
+        let entry = entry?;
+        if entry.metadata()?.is_file() {
+            names.push(entry.file_name().to_string_lossy().to_string());
+        }
+    }
+    if names.is_empty() {
+        return Err(missing());
+    }
+    names.sort();
+    Ok(names)
 }
 
 /// Return `true` when `name` is listed in the bundle manifest.

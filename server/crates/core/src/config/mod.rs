@@ -41,6 +41,38 @@ pub const SHARE_NAME_PATTERN: &str = "^[a-z0-9][a-z0-9_-]*$";
 /// The prefix a share key uses.
 const SHARE_KEY_PREFIX: &str = "SHARE_";
 
+/// The configuration keys lanpull recognizes, besides `SHARE_<name>`.
+const KNOWN_KEYS: [&str; 10] = [
+    "STATE_DIR",
+    "BIND",
+    "PORT",
+    "SERVER_IP",
+    "CERT_PATH",
+    "KEY_PATH",
+    "CLIENTS_PATH",
+    "ACCESS_PATH",
+    "NETWORKS_PATH",
+    "AUDIT_LOG",
+];
+
+/// Return the keys in a parsed configuration that lanpull does not recognize.
+///
+/// A typo (`BIMD`, `SHARE_reports_` with a bad name is rejected elsewhere) is
+/// otherwise silently ignored, so `status` and `config show` surface it as a
+/// warning. The check is advisory, never a hard failure.
+pub fn unknown_keys_in(map: &BTreeMap<String, String>) -> Vec<String> {
+    map.keys()
+        .filter(|key| !key.starts_with(SHARE_KEY_PREFIX) && !KNOWN_KEYS.contains(&key.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Return unrecognized keys in the configuration file at `path`.
+pub fn unknown_keys(path: &Path) -> Result<Vec<String>> {
+    let text = std::fs::read_to_string(path)?;
+    Ok(unknown_keys_in(&parse_kv(&text)))
+}
+
 /// Return `true` when `name` is a valid share name.
 pub fn valid_share_name(name: &str) -> bool {
     valid_name(name)
@@ -592,5 +624,45 @@ mod tests {
         assert!(config
             .access_manifest_path("laptop", "reports")
             .ends_with("manifest/access/laptop/reports.json"));
+    }
+
+    use proptest::prelude::*;
+
+    fn known_key() -> impl Strategy<Value = &'static str> {
+        proptest::sample::select(
+            &[
+                "STATE_DIR",
+                "BIND",
+                "PORT",
+                "SERVER_IP",
+                "CERT_PATH",
+                "KEY_PATH",
+                "CLIENTS_PATH",
+                "ACCESS_PATH",
+                "NETWORKS_PATH",
+                "AUDIT_LOG",
+            ][..],
+        )
+    }
+
+    proptest! {
+        #[test]
+        fn parse_kv_keeps_known_pairs(
+            key in "[A-Z_]{1,12}",
+            value in "[A-Za-z0-9_./-]{0,16}",
+        ) {
+            let map = parse_kv(&format!("{key}={value}\n"));
+            prop_assert_eq!(map.get(key.as_str()).map(String::as_str), Some(value.as_str()));
+        }
+
+        #[test]
+        fn share_and_known_keys_are_never_unknown(
+            share in "[a-z0-9_-]{1,8}",
+            known in known_key(),
+        ) {
+            let map = parse_kv(&format!("SHARE_{share}=/srv/x\n{known}=1\n"));
+            let unknown = unknown_keys_in(&map);
+            prop_assert!(unknown.is_empty(), "unexpected unknowns: {unknown:?}");
+        }
     }
 }

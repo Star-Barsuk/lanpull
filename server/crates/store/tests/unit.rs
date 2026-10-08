@@ -602,6 +602,44 @@ fn audit_report_aggregates() {
 }
 
 #[test]
+fn regenerate_prunes_removed_share_manifests() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state");
+    fs::create_dir_all(&state).unwrap();
+
+    let mut roots = BTreeMap::new();
+    for name in ["aleph", "beth"] {
+        let root = dir.path().join(name);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("file.txt"), b"x").unwrap();
+        roots.insert(name.to_string(), root);
+    }
+    let cfg = config::Config {
+        shares: roots,
+        state_dir: state.clone(),
+        bind: "127.0.0.1".parse().unwrap(),
+        port: 8000,
+        server_ip: "127.0.0.1".parse().unwrap(),
+        cert_path: state.join("server.crt"),
+        key_path: state.join("server.key"),
+        clients_path: dir.path().join("lanpull.clients"),
+        access_path: dir.path().join("lanpull.access.json"),
+        networks_path: dir.path().join("lanpull.networks.json"),
+        audit_log: state.join("access.log"),
+    };
+    manifest::regenerate(&cfg).unwrap();
+    assert!(cfg.manifest_path("aleph").is_file());
+    assert!(cfg.manifest_path("beth").is_file());
+
+    let mut single = cfg;
+    single.shares.remove("beth");
+    manifest::regenerate(&single).unwrap();
+    assert!(!single.manifest_path("beth").is_file());
+    assert!(!single.cache_path("beth").is_file());
+    assert!(single.manifest_path("aleph").is_file());
+}
+
+#[test]
 fn audit_report_missing_log_is_empty() {
     let dir = tempfile::tempdir().unwrap();
     let report = audit::summarize(&dir.path().join("nope.log"), None, None).unwrap();

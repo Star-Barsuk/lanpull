@@ -119,7 +119,11 @@ fn show(config_path: &Path) -> Result<Outcome> {
     ] {
         lines.push(format!("{key:<14}{value}"));
     }
-    Ok(Outcome::text(lines).with_data(&view))
+    let mut outcome = Outcome::text(lines).with_data(&view);
+    for key in lanpull_core::config::unknown_keys(config_path).unwrap_or_default() {
+        outcome = outcome.warn(format!("unrecognized configuration key: {key}"));
+    }
+    Ok(outcome)
 }
 
 /// Print one configuration value.

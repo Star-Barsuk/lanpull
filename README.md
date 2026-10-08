@@ -485,7 +485,7 @@ The client is `<client-folder>/pull.py`. It reads `lanpull.conf`, `auth`, and
 | --- | --- |
 | `[<share>]` | Mirror only this configured share (default: every share). |
 | `--check` | Compare sizes and mtimes; download nothing. Prints `generated_at` and the update/unchanged counts. |
-| `--mirror` | Exact mirror: after the pull, delete everything in the destination that is not in the manifest (files you created included) and remove the directories that are left empty. Prompts once; `--yes` skips the prompt. |
+| `--mirror` | Exact mirror: after the pull, delete everything in the destination that is not in the manifest (files you created included) and remove the directories that are left empty. Prompts once; `--yes` skips the prompt. A mirror that resolves to `/` is refused. |
 | `--dry-run` | Print the plan as a table; change nothing. |
 | `--delete` | Delete tracked stale files without prompting (normal pull only). |
 | `--all` | List every file in a plan or deletion list (default: the first 50 rows). |
@@ -776,7 +776,7 @@ Each side carries its own Makefile and its own static-analysis configuration;
 the root `Makefile` forwards to both.
 
 ```bash
-make -C server ci    # shell scripts, rustfmt, Clippy, rustdoc, tests, CLI test, deny, audit, audit bin, geiger
+make -C server ci    # shell scripts, rustfmt, Clippy, rustdoc, tests, machete, CLI test, deny, audit, audit bin, geiger
 make -C client ci    # ruff check/format, mypy --strict, pytest, pip-audit
 make -C server e2e   # loopback end-to-end round of the real server and pull.py
 make -C server cli-test  # operator-style CLI checks (binary only)
@@ -787,20 +787,27 @@ make ci              # both sides' quality gates
 `shellcheck` when it is installed.
 
 The gates locate their tools themselves: the server Makefile finds the Rust
-toolchain in `$CARGO_HOME/bin` (no `PATH` edit needed), and the client gates
-create their uv-managed `.venv` on first run. `make setup` installs the Rust
-target and the gate tools.
+toolchain in `$CARGO_HOME/bin` (no `PATH` edit needed), and the client Makefile
+finds `uv` (commonly `~/.local/bin/uv`) and fails early when `uv` or `python3`
+is missing. The client gates create their uv-managed `.venv` on first run.
+`make setup` installs the Rust target and the gate tools.
 
 ```bash
-make setup            # install the Rust target and the gate tools
-make -C client setup  # create client/.venv and install pinned tools
+make setup            # install the Rust target and the pinned gate tools
+make -C client setup  # create client/.venv and install pinned dev tools
 ```
+
+The root `Makefile` is a thin forwarder: server targets are reachable as-is,
+client targets as `make client-<target>`, and `help`/`setup`/`ci` run both
+sides.
 
 Quality and security rules are machine-checkable and live in the configuration
 files (`server/rustfmt.toml`, `server/clippy.toml`, `server/deny.toml`,
 `server/.cargo/audit.toml`, `[lints.*]` in `server/Cargo.toml`, and
-`client/pyproject.toml`), not in prose. There is intentionally **no CI workflow
-and no git hook**; the gates are run deliberately with `make ci`.
+`client/pyproject.toml`), not in prose. The Rust toolchain
+(`server/rust-toolchain.toml`) and the gate tools are pinned to known-good
+versions; bump them deliberately, never inline. There is intentionally **no CI
+workflow and no git hook**; the gates are run deliberately with `make ci`.
 
 ## Troubleshooting
 
@@ -816,6 +823,8 @@ and no git hook**; the gates are run deliberately with `make ci`.
 | `ERROR: another pull is already running` | A second pull for the same destination was refused by the lock file. |
 | `lanpull status` warns the manifest is stale | Files in the share are newer than the manifest; run `lanpull share rescan`. |
 | `lanpull access doctor` warns a listed path is missing | The policy names a file that is not in the share; add it or remove the rule. |
+| `ERROR: refusing to use an unsafe mirror path: <dir>` | The client refuses a `MIRROR_<share>` that resolves to `/` (for example a missing or empty value); point it at a real directory. |
+| `warning: unrecognized configuration key: <key>` | A typo in `/etc/lanpull/lanpull.conf` (for example `BIMD`); fix the key. |
 
 ## License
 

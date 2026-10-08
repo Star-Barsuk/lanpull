@@ -22,10 +22,18 @@ run_root() {
     fi
 }
 
-# Refuse a path that is empty or "/", so a destructive command cannot escalate.
+# Refuse a path that is empty, "/", a system root, or the invoking user's home,
+# so a destructive command cannot escalate by a misconfigured variable.
 require_safe_path() {
     value=$1
     label=$2
     [ -n "$value" ] || die "refusing to touch empty $label"
-    [ "$value" != "/" ] || die "refusing to touch $label=/"
+    case "$value" in
+        /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var)
+            die "refusing to touch system path $label=$value"
+            ;;
+    esac
+    if [ -n "${HOME:-}" ] && [ "$value" = "$HOME" ]; then
+        die "refusing to touch $label=\$HOME"
+    fi
 }

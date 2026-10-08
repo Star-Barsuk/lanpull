@@ -26,19 +26,13 @@ pub struct Created {
     pub staging: PathBuf,
 }
 
-/// Create an account and stage its client folder.
+/// Validate that an account can be created, without writing anything.
 ///
-/// The account name, the access policy, the staged client bundle, and the TLS
-/// certificate are validated before the accounts file is written. If staging
-/// fails afterwards, the account line and the staging directory are removed.
-pub fn create(
-    config: &Config,
-    name: &str,
-    ip: Option<IpAddr>,
-    output: &Path,
-    local: bool,
-) -> Result<Created> {
-    let mut accounts = Clients::load(&config.clients_path)?;
+/// Checks, in order: the name is free, the client bundle is staged, the account
+/// has at least one effective access rule, and a certificate exists. Shared by
+/// [`create`] and the CLI's `account add --dry-run`, so the preview enforces the
+/// same preconditions as the real path.
+pub fn preflight(config: &Config, accounts: &Clients, name: &str) -> Result<()> {
     if accounts.get(name).is_some() {
         return Err(Error::Account(format!("account {name} already exists")));
     }
@@ -63,7 +57,26 @@ pub fn create(
             config.cert_path.display()
         )));
     }
+    Ok(())
+}
 
+/// Create an account and stage its client folder.
+///
+/// The account name, the access policy, the staged client bundle, and the TLS
+/// certificate are validated by [`preflight`] before the accounts file is
+/// written. If staging fails afterwards, the account line and the staging
+/// directory are removed.
+pub fn create(
+    config: &Config,
+    name: &str,
+    ip: Option<IpAddr>,
+    output: &Path,
+    local: bool,
+) -> Result<Created> {
+    let mut accounts = Clients::load(&config.clients_path)?;
+    preflight(config, &accounts, name)?;
+
+    let pull_source = config.bundle_dir().join("pull.py");
     let password = clients::generate_password();
     let hash = clients::hash_password(&password)?;
     accounts.insert(Account {

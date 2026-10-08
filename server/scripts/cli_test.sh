@@ -284,6 +284,12 @@ run "$binary" access client list --config "$conf"
 assert_rc "access client list exits 0" 0
 run "$binary" access client list ghost --config "$conf"
 assert_out_has "access client list shows the granted path" "ghost"
+# A removal below a public glob is a deny rule and must be visible in the listing.
+run "$binary" access client add alpha 'default:sub/b.txt' --config "$conf"
+run "$binary" access client remove alpha 'default:sub/b.txt' --yes --config "$conf"
+run "$binary" access client list alpha --config "$conf"
+assert_rc "access client list alpha exits 0" 0
+assert_out_has "access client list shows the deny rule" "!default:sub/b.txt"
 run "$binary" access client remove ghost 'default:**' --yes --config "$conf"
 assert_rc "access client remove --yes exits 0" 0
 printf 'ghost default:**\n' >"$tmp/old.access"
@@ -463,6 +469,13 @@ section "misc"
 run "$binary" status --config "$conf"
 assert_rc "status exits 0" 0
 assert_out_has "status lists the manifest" "manifest default:"
+# An unrecognized configuration key is reported as a warning, not a failure.
+printf 'FROBNICATE=1\n' >>"$conf"
+run "$binary" status --config "$conf"
+assert_rc "status with an unknown key still exits 0" 0
+assert_err_has "status warns about an unrecognized key" "unrecognized configuration key"
+run "$binary" --json status --config "$conf"
+assert_json_ok "status --json with an unknown key is still an ok envelope"
 run "$binary" report --config "$conf"
 assert_rc "report on an empty log exits 0" 0
 assert_out_has "report says there are no requests" "no requests recorded"

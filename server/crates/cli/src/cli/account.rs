@@ -159,12 +159,7 @@ fn add(config_path: &Path, args: AddArgs) -> Result<Outcome> {
     let config = Config::load(config_path)?;
     if args.dry_run {
         let accounts = Clients::load(&config.clients_path)?;
-        if accounts.get(&args.name).is_some() {
-            return Err(Error::Account(format!(
-                "account {} already exists",
-                args.name
-            )));
-        }
+        lanpull_core::account::preflight(&config, &accounts, &args.name)?;
         let staged = config.state_dir.join("client-ready").join(&args.name);
         return Ok(Outcome::new()
             .line(format!(

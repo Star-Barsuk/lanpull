@@ -289,10 +289,22 @@ def test_download_access_denied(tmp_path: Path) -> None:
 def test_delete_stale_drops_missing_and_tracked(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("x", encoding="utf-8")
     delivered = {"a.txt", "b.txt"}
-    deleted = pull.delete_stale(tmp_path, ["a.txt", "b.txt"], delivered)
+    deleted, failed = pull.delete_stale(tmp_path, ["a.txt", "b.txt"], delivered)
     assert deleted == 1
+    assert failed == []
     assert not (tmp_path / "a.txt").exists()
     assert delivered == set()
+
+
+def test_delete_stale_records_failures_and_keeps_tracking(tmp_path: Path) -> None:
+    # A directory cannot be unlinked; the failure is reported and the path stays
+    # tracked so the next pull retries it.
+    (tmp_path / "blocked").mkdir()
+    delivered = {"blocked"}
+    deleted, failed = pull.delete_stale(tmp_path, ["blocked"], delivered)
+    assert deleted == 0
+    assert failed == ["blocked"]
+    assert delivered == {"blocked"}
 
 
 def test_prompt_delete(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -694,6 +706,12 @@ def test_mirror_dry_run_lists_extras_without_deleting(
     assert "EXTRA" in text
     assert "operator.txt" in text
     assert (mirror / "operator.txt").exists()
+
+
+def test_run_share_rejects_unsafe_mirror(tmp_path: Path) -> None:
+    client = cast("pull.HttpClient", _ManifestClient({"reports": _manifest([])}))
+    with pytest.raises(pull.FatalError, match="unsafe mirror path"):
+        pull.run_share(client, "reports", Path("/"), set(), _options())
 
 
 def test_parse_args_mode_and_modifier_conflicts() -> None:

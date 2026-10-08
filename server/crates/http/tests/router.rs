@@ -554,6 +554,62 @@ async fn head_manifest_has_length() {
 }
 
 #[tokio::test]
+async fn head_file_has_length() {
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
+    let response = call(
+        &state,
+        request(
+            "HEAD",
+            "/_lanpull/share/reports/file/a.txt",
+            Some("alpha:secret"),
+            [127, 0, 0, 1],
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().contains_key(header::CONTENT_LENGTH));
+}
+
+#[tokio::test]
+async fn unsatisfiable_range_is_416() {
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
+    let mut request = request(
+        "GET",
+        "/_lanpull/share/reports/file/a.txt",
+        Some("alpha:secret"),
+        [127, 0, 0, 1],
+    );
+    request
+        .headers_mut()
+        .insert(header::RANGE, "bytes=1000-2000".parse().unwrap());
+    let response = call(&state, request).await;
+    assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+}
+
+#[tokio::test]
+async fn bundle_symlink_is_not_served() {
+    let (state, dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
+    stage_bundle(&state);
+    let outside = dir.path().join("secret.txt");
+    fs::write(&outside, b"secret").unwrap();
+    std::os::unix::fs::symlink(&outside, state.config.bundle_dir().join("link.py")).unwrap();
+    let response = call(
+        &state,
+        request(
+            "GET",
+            "/_lanpull/client/link.py",
+            Some("alpha:secret"),
+            [127, 0, 0, 1],
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn requests_are_audited() {
     let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
     arm(&state, &["alpha"]);

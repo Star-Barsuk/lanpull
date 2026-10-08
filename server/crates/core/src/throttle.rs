@@ -31,6 +31,19 @@ struct Entry {
 }
 
 impl Entry {
+    /// Return whether the entry still matters at `now`.
+    ///
+    /// An entry is live while its window is open or a lockout is in effect; it
+    /// is otherwise dead weight and is pruned, so the map cannot grow without
+    /// bound over a long uptime.
+    fn is_live(&self, now: Instant, window: Duration) -> bool {
+        if self.blocked_until.is_some_and(|until| until > now) {
+            return true;
+        }
+        self.first_failure
+            .is_some_and(|first| now.duration_since(first) <= window)
+    }
+
     /// Fold one failure into the entry, locking out at the threshold.
     fn record(&mut self, now: Instant, window: Duration, max_failures: u32, lockout: Duration) {
         if self
@@ -82,7 +95,8 @@ impl Throttle {
     pub fn allow(&self, ip: IpAddr) -> bool {
         let now = Instant::now();
         let blocked = {
-            let entries = self.entries();
+            let mut entries = self.entries();
+            entries.retain(|_, entry| entry.is_live(now, self.window));
             entries.get(&ip).and_then(|entry| entry.blocked_until)
         };
         match blocked {
@@ -99,7 +113,9 @@ impl Throttle {
     pub fn record_failure(&self, ip: IpAddr) {
         let now = Instant::now();
         let (window, max_failures, lockout) = (self.window, self.max_failures, self.lockout);
-        self.entries()
+        let mut entries = self.entries();
+        entries.retain(|_, entry| entry.is_live(now, window));
+        entries
             .entry(ip)
             .or_default()
             .record(now, window, max_failures, lockout);
@@ -174,5 +190,17 @@ mod tests {
         throttle.record_failure(ip(5));
         assert!(!throttle.allow(ip(5)));
         assert!(throttle.allow(ip(6)));
+    }
+
+    #[test]
+    fn stale_entries_are_pruned() {
+        let throttle =
+            Throttle::with_limits(10, Duration::from_millis(10), Duration::from_secs(60));
+        throttle.record_failure(ip(7));
+        assert_eq!(throttle.entries().len(), 1);
+        std::thread::sleep(Duration::from_millis(30));
+        throttle.record_failure(ip(8));
+        assert_eq!(throttle.entries().len(), 1);
+        assert!(throttle.entries().contains_key(&ip(8)));
     }
 }

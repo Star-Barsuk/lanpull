@@ -10,9 +10,6 @@
 #![allow(unreachable_pub)]
 // clap derive structs are consumed by value; that is idiomatic for clap.
 #![allow(clippy::needless_pass_by_value)]
-// The CLI's job includes spawning `systemctl` and `ip`; the server crates never
-// spawn, and `clippy.toml`'s `disallowed_methods` still guards them.
-#![allow(clippy::disallowed_methods)]
 
 mod cli;
 mod config_edit;
@@ -116,6 +113,9 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Init(_) => unreachable!("handled above"),
         Command::Serve => {
             let config = lanpull_core::config::Config::load(&config_path)?;
+            for key in lanpull_core::config::unknown_keys(&config_path).unwrap_or_default() {
+                tracing::warn!(key = %key, "unrecognized configuration key; ignoring it");
+            }
             lanpull_http::http::serve(config).await
         }
         Command::Status(args) => emit(command, cli::misc::status(&config_path, args)?, json),

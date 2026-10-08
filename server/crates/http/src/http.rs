@@ -392,11 +392,11 @@ async fn serve_bundle_file(
         return not_found().await;
     }
     let directory = state.config.bundle_dir();
-    let manifest = match bundle::build(&directory) {
-        Ok(manifest) => manifest,
+    let names = match bundle::names(&directory) {
+        Ok(names) => names,
         Err(e) => return text_response(StatusCode::SERVICE_UNAVAILABLE, &e.to_string()),
     };
-    if !bundle::contains(&manifest, &name) {
+    if !names.iter().any(|listed| listed == &name) {
         return not_found().await;
     }
     let full = directory.join(&name);

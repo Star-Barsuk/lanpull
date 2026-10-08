@@ -169,7 +169,7 @@ impl Policy {
     pub fn has_effective_rules(&self, account: &str) -> bool {
         self.shares
             .values()
-            .any(|share| !share.effective(account).is_empty())
+            .any(|share| !share.allowed(account).is_empty())
     }
 
     /// Drop an account's deltas across every share, returning whether any existed.
@@ -213,15 +213,6 @@ impl SharePolicy {
         self.clients
             .get(account)
             .map_or_else(BTreeSet::new, |deltas| deltas.remove.clone())
-    }
-
-    /// The effective, sorted allow set for an account.
-    ///
-    /// Retained for callers that only need the positive set (for example the
-    /// `has_effective_rules` check); per-path authorization goes through
-    /// [`crate::access::Access`], which also applies [`SharePolicy::denied`].
-    pub fn effective(&self, account: &str) -> BTreeSet<String> {
-        self.allowed(account)
     }
 
     /// Record an addition for an account.
@@ -417,7 +408,7 @@ mod tests {
         assert!(share.clients.contains_key("alpha"));
         share.remove_for("alpha", "sub/personal.pdf");
         assert!(!share.clients.contains_key("alpha"));
-        assert!(share.effective("alpha").is_empty());
+        assert!(share.allowed("alpha").is_empty());
     }
 
     #[test]
@@ -426,9 +417,9 @@ mod tests {
         let share = policy.share_mut("cube").unwrap();
         share.add_for("alpha", "sub/f.pdf".to_string());
         share.remove_for("alpha", "sub/f.pdf");
-        assert!(share.effective("alpha").is_empty());
+        assert!(share.allowed("alpha").is_empty());
         share.add_for("alpha", "sub/f.pdf".to_string());
-        assert!(share.effective("alpha").contains("sub/f.pdf"));
+        assert!(share.allowed("alpha").contains("sub/f.pdf"));
     }
 
     #[test]
@@ -516,5 +507,26 @@ mod tests {
             .insert("**".to_string());
         let access = policy.expand(&clients(&["alpha"])).unwrap();
         assert!(access.allows("alpha", "cube", "any/deep/path.pdf"));
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn split_rule_roundtrips(
+            share in "[a-z0-9_-]{1,8}",
+            path in "[a-z0-9._/-]{1,16}",
+            extra_colon in 0usize..2,
+        ) {
+            let spec = format!("{share}:{path}{}", ":".repeat(extra_colon));
+            let (left, right) = split_rule(&spec).unwrap();
+            prop_assert_eq!(left, share);
+            if extra_colon == 0 {
+                prop_assert_eq!(right, path);
+            } else {
+                // The first ':' separates; a later ':' is part of the path.
+                prop_assert_eq!(right, format!("{path}:"));
+            }
+        }
     }
 }

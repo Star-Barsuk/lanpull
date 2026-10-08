@@ -656,31 +656,44 @@ def fetch_entry(
     partials.pop(entry.path, None)
 
 
-def delete_stale(output: Path, stale: list[str], delivered: set[str]) -> int:
-    """Delete stale files and forget them from the delivered set."""
+def delete_stale(output: Path, stale: list[str], delivered: set[str]) -> tuple[int, list[str]]:
+    """Delete stale files, returning the count deleted and the paths that failed.
+
+    A file that cannot be removed stays in the delivered set so the next pull
+    retries it; only a real removal forgets it.
+    """
     deleted = 0
+    failed: list[str] = []
     for rel in stale:
-        target = output / rel
-        with contextlib.suppress(FileNotFoundError):
-            target.unlink()
-            deleted += 1
+        try:
+            (output / rel).unlink()
+        except FileNotFoundError:
+            delivered.discard(rel)
+            continue
+        except OSError as exc:
+            failed.append(rel)
+            print(f"ERROR: cannot remove {rel}: {exc}", file=sys.stderr)
+            continue
+        deleted += 1
         delivered.discard(rel)
-    return deleted
+    return deleted, failed
 
 
-def delete_paths(output: Path, rels: list[str]) -> int:
-    """Delete files or symlinks under the mirror, reporting failures."""
+def delete_paths(output: Path, rels: list[str]) -> tuple[int, list[str]]:
+    """Delete files or symlinks under the mirror, returning deleted and failed."""
     deleted = 0
+    failed: list[str] = []
     for rel in rels:
         try:
             (output / rel).unlink()
         except FileNotFoundError:
             continue
         except OSError as exc:
+            failed.append(rel)
             print(f"ERROR: cannot remove {rel}: {exc}", file=sys.stderr)
             continue
         deleted += 1
-    return deleted
+    return deleted, failed
 
 
 def scan_extras(output: Path, manifest_paths: set[str]) -> list[str]:
@@ -802,6 +815,8 @@ def run_share(
     options: Options,
 ) -> _ShareResult:
     """Mirror one share into its output directory."""
+    if _unsafe_mirror(output):
+        raise FatalError(f"ERROR: refusing to use an unsafe mirror path: {output}")
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     partials_path = output / PARTIALS_NAME
@@ -870,11 +885,13 @@ def run_share(
         deleted = 0
         if options.mirror:
             if extras and (options.yes or confirm_mirror(extras, options.all)):
-                deleted = delete_paths(output, extras)
+                deleted, mirror_failed = delete_paths(output, extras)
+                errors.extend(mirror_failed)
                 remove_empty_dirs(output)
             delivered = {entry.path for entry in entries if (output / entry.path).is_file()}
         elif stale and (options.delete or prompt_delete(stale)):
-            deleted = delete_stale(output, stale, delivered)
+            deleted, stale_failed = delete_stale(output, stale, delivered)
+            errors.extend(stale_failed)
 
         if not options.quiet:
             print(f"[{share}] downloaded: {downloaded} files, {format_bytes(total_bytes)}")

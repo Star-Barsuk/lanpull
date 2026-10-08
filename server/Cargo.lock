@@ -785,7 +785,6 @@ dependencies = [
  "thiserror",
  "time",
  "tracing",
- "walkdir",
 ]
 
 [[package]]
@@ -816,7 +815,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "tracing",
  "walkdir",
 ]
 

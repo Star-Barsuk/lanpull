@@ -47,6 +47,11 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 walkdir = "2.5.0"
 
+# Dev-only.
+http-body-util = "0.1.5"
+proptest = "1.11.0"
+tempfile = "3.27.0"
+
 [profile.release]
 overflow-checks = true
 lto = "thin"
@@ -98,5 +103,5 @@ missing_panics_doc = "allow"
 must_use_candidate = "allow"
 similar_names = "allow"
 # Transitive duplicates in third-party dependencies are accepted; cargo-deny
-# still checks duplicates on the actual musl build graph.
+# still checks duplicates on the actual musl build graph (DECISIONS.md D46).
 multiple_crate_versions = "allow"

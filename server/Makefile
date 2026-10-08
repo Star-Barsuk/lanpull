@@ -20,7 +20,15 @@ export PATH := $(CARGO_BIN):$(PATH)
 CARGO       ?= $(if $(wildcard $(CARGO_BIN)/cargo),$(CARGO_BIN)/cargo,cargo)
 RUSTUP      ?= $(if $(wildcard $(CARGO_BIN)/rustup),$(CARGO_BIN)/rustup,rustup)
 TARGET      ?= x86_64-unknown-linux-musl
-TOOLS       ?= cargo-audit cargo-deny cargo-geiger cargo-auditable
+# Note: `clippy`, `test`, and `doc` run against the host toolchain (fast); the
+# supply-chain gates (`deny`, `audit`, `geiger`) analyze the musl build graph,
+# matching what `build` produces. A feature available only on one target could
+# in principle differ, so the release binary stays validated by `e2e`/`audit-bin`.
+# Quality-gate tools installed by `setup`. Versions are pinned so the gates are
+# reproducible; bump a version here deliberately (TOOL_VERSIONS), never inline.
+TOOLS := cargo-audit cargo-deny cargo-geiger cargo-auditable cargo-machete
+TOOL_VERSIONS := cargo-audit@0.22.2 cargo-deny@0.20.2 cargo-geiger@0.13.0 \
+	cargo-auditable@0.7.7 cargo-machete@0.9.2
 BINARY      := target/$(TARGET)/release/lanpull
 
 # --- Install locations ---------------------------------------------------
@@ -47,14 +55,17 @@ UNINSTALL_CMD = $(SCRIPTS)/uninstall.sh --binary "$(LANPULL)" --unit "$(UNIT)" \
 
 .PHONY: help setup build install uninstall wipe \
         clean distclean confirm check-tools check-scripts cli-test e2e client-bundle \
-        fmt fmt-check lint doc test deny audit audit-bin geiger security ci
+        fmt fmt-check lint doc test machete deny audit audit-bin geiger security ci
 
 help: ## Show available targets
 	@$(SCRIPTS)/help.sh
 
-setup: ## Install the Rust target and the quality-gate tools
+setup: ## Install the Rust target and the pinned quality-gate tools
 	$(RUSTUP) target add $(TARGET)
-	$(CARGO) install --locked $(TOOLS)
+	@for tool in $(TOOL_VERSIONS); do \
+		echo "lanpull: installing $$tool"; \
+		$(CARGO) install --locked $$tool || exit 1; \
+	done
 
 build: ## Build the static server binary with embedded dependency metadata
 	$(CARGO) auditable build --release --locked --target $(TARGET)
@@ -104,6 +115,8 @@ check-scripts: ## Parse the server shell scripts (shellcheck runs when installed
 	@for script in $(SCRIPTS)/*.sh; do sh -n "$$script" || exit 1; done
 	@if command -v shellcheck >/dev/null 2>&1; then \
 		shellcheck -x -s sh -P $(SCRIPTS) $(SCRIPTS)/*.sh || exit 1; \
+	else \
+		echo "lanpull: shellcheck not installed; linting the scripts by 'sh -n' only" >&2; \
 	fi
 
 e2e: build ## Run the loopback end-to-end smoke test (dev only; needs python3)
@@ -123,6 +136,9 @@ doc: ## Build docs and deny warnings (catches broken intra-doc links)
 
 test: ## Run the Rust test suite
 	$(CARGO) test --locked --workspace
+
+machete: ## Check for unused dependencies in every crate
+	$(CARGO) machete
 
 cli-test: build ## Run the operator-style CLI test against the built binary
 	$(SCRIPTS)/cli_test.sh "$(abspath $(BINARY))"
@@ -144,4 +160,4 @@ geiger: ## Report unsafe usage across the dependency tree
 
 security: deny audit audit-bin geiger ## Run every supply-chain security check
 
-ci: check-tools check-scripts fmt-check lint doc test cli-test security ## Run every Rust quality and security gate
+ci: check-tools check-scripts fmt-check lint doc test machete cli-test security ## Run every Rust quality and security gate

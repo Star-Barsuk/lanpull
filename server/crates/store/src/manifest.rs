@@ -261,7 +261,39 @@ pub fn regenerate(config: &Config) -> Result<Regenerated> {
     }
 
     clean_access_dir(config, &expected)?;
+    clean_manifest_dir(config)?;
     Ok(report)
+}
+
+/// Remove full manifests and caches for shares no longer in the configuration.
+///
+/// Per-account manifests are handled by [`clean_access_dir`]; this covers the
+/// `<share>.json` and `<share>.cache.json` files left behind when a
+/// `SHARE_<name>` line is deleted.
+fn clean_manifest_dir(config: &Config) -> Result<()> {
+    let dir = config.manifest_dir();
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    let mut expected: BTreeSet<String> = BTreeSet::new();
+    for share in config.shares.keys() {
+        expected.insert(format!("{share}.json"));
+        expected.insert(format!("{share}.cache.json"));
+    }
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !expected.contains(name) {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 /// Remove per-account manifests that are no longer expected.

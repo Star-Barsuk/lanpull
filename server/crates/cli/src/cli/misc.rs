@@ -73,11 +73,22 @@ pub fn status(config_path: &Path, args: StatusArgs) -> Result<Outcome> {
         lines.push("status is clean".to_string());
     }
     let data = serde_json::json!({ "manifests": report.manifests, "armed": report.armed });
+    let mut warnings = report.warnings;
+    warnings.extend(config_warnings(config_path));
     Ok(Outcome {
         lines,
         data,
-        warnings: report.warnings,
+        warnings,
     })
+}
+
+/// Warn about configuration keys lanpull does not recognize.
+fn config_warnings(config_path: &Path) -> Vec<String> {
+    lanpull_core::config::unknown_keys(config_path)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|key| format!("unrecognized configuration key: {key}"))
+        .collect()
 }
 
 /// Show only the armed accounts and their remaining windows.

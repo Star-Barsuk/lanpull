@@ -156,6 +156,8 @@ struct RuleRow {
     account: String,
     share: String,
     path: String,
+    /// `true` for a per-account `remove` rule, `false` for an allow rule.
+    deny: bool,
 }
 
 /// Dispatch an access-policy operation.
@@ -289,6 +291,7 @@ fn public_list(config_path: &Path, args: PublicListArgs) -> Result<Outcome> {
                 account: "*".to_string(),
                 share: name.clone(),
                 path: path.clone(),
+                deny: false,
             });
         }
     }
@@ -341,6 +344,7 @@ fn client_remove(
         crate::confirm::require(yes, &format!("change access for {name}"))?;
     }
     let config = Config::load(config_path)?;
+    let accounts = Clients::load(&config.clients_path)?;
     let mut policy = Policy::load(&config.access_path)?;
     for spec in specs {
         let (share, path) = policy::split_rule(spec)?;
@@ -348,6 +352,11 @@ fn client_remove(
         policy.share_mut(&share)?.remove_for(name, &path);
     }
     let mut outcome = rule_outcome("revoke", "revoked", specs, dry_run);
+    if accounts.get(name).is_none() {
+        outcome = outcome.warn(format!(
+            "account {name} does not exist; the removal still applies to any public path"
+        ));
+    }
     if dry_run {
         return Ok(outcome);
     }
@@ -381,11 +390,20 @@ fn client_list(config_path: &Path, args: ClientListArgs) -> Result<Outcome> {
     let mut rows: Vec<RuleRow> = Vec::new();
     for account in &names {
         for (share, share_policy) in &policy.shares {
-            for path in share_policy.effective(account) {
+            for path in share_policy.allowed(account) {
                 rows.push(RuleRow {
                     account: account.clone(),
                     share: share.clone(),
                     path,
+                    deny: false,
+                });
+            }
+            for path in share_policy.denied(account) {
+                rows.push(RuleRow {
+                    account: account.clone(),
+                    share: share.clone(),
+                    path,
+                    deny: true,
                 });
             }
         }
@@ -406,7 +424,11 @@ fn client_list(config_path: &Path, args: ClientListArgs) -> Result<Outcome> {
     // Group the effective set by account: one line per account, specs comma-separated.
     let mut grouped: Vec<(String, Vec<String>)> = Vec::new();
     for row in &rows {
-        let spec = format!("{}:{}", row.share, row.path);
+        let spec = if row.deny {
+            format!("!{}:{}", row.share, row.path)
+        } else {
+            format!("{}:{}", row.share, row.path)
+        };
         match grouped.last_mut() {
             Some((account, specs)) if *account == row.account => specs.push(spec),
             _ => grouped.push((row.account.clone(), vec![spec])),
