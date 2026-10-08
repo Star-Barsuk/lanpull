@@ -402,12 +402,20 @@ fn client_list(config_path: &Path, args: ClientListArgs) -> Result<Outcome> {
         };
         return Ok(Outcome::text(lines).with_data(&rows));
     }
-    let lines = format_rows(
-        &rows
-            .iter()
-            .map(|row| vec![row.account.clone(), format!("{}:{}", row.share, row.path)])
-            .collect::<Vec<_>>(),
-    );
+
+    // Group the effective set by account: one line per account, specs comma-separated.
+    let mut grouped: Vec<(String, Vec<String>)> = Vec::new();
+    for row in &rows {
+        let spec = format!("{}:{}", row.share, row.path);
+        match grouped.last_mut() {
+            Some((account, specs)) if *account == row.account => specs.push(spec),
+            _ => grouped.push((row.account.clone(), vec![spec])),
+        }
+    }
+    let lines: Vec<String> = grouped
+        .iter()
+        .map(|(account, specs)| format!("{account}: {}", specs.join(", ")))
+        .collect();
     Ok(Outcome::text(lines).with_data(&rows))
 }
 

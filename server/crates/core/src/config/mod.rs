@@ -30,6 +30,8 @@ pub const DEFAULT_PORT: u16 = 8000;
 pub const DEFAULT_CLIENTS_PATH: &str = "lanpull.clients";
 /// The default access policy location, resolved relative to the config file.
 pub const DEFAULT_ACCESS_PATH: &str = "lanpull.access.json";
+/// The default network-profiles location, resolved relative to the config file.
+pub const DEFAULT_NETWORKS_PATH: &str = "lanpull.networks.json";
 /// The default certificate file name inside the state directory.
 pub const CERT_FILE_NAME: &str = "server.crt";
 /// The default private-key file name inside the state directory.
@@ -41,6 +43,16 @@ const SHARE_KEY_PREFIX: &str = "SHARE_";
 
 /// Return `true` when `name` is a valid share name.
 pub fn valid_share_name(name: &str) -> bool {
+    valid_name(name)
+}
+
+/// Return `true` when `name` is a valid network profile name.
+pub fn valid_network_name(name: &str) -> bool {
+    valid_name(name)
+}
+
+/// Shared identifier grammar for shares and network profiles.
+fn valid_name(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
         return false;
@@ -72,6 +84,8 @@ pub struct Config {
     pub clients_path: PathBuf,
     /// Path to the per-client access mapping.
     pub access_path: PathBuf,
+    /// Path to the JSON network-profile file.
+    pub networks_path: PathBuf,
     /// Path to the JSON-lines audit log.
     pub audit_log: PathBuf,
 }
@@ -164,6 +178,7 @@ impl Config {
             ("KEY_PATH", &self.key_path),
             ("CLIENTS_PATH", &self.clients_path),
             ("ACCESS_PATH", &self.access_path),
+            ("NETWORKS_PATH", &self.networks_path),
             ("AUDIT_LOG", &self.audit_log),
         ];
         for (label, path) in guarded {
@@ -193,6 +208,7 @@ impl Config {
         self.key_path = resolve_one(base, self.key_path);
         self.clients_path = resolve_one(base, self.clients_path);
         self.access_path = resolve_one(base, self.access_path);
+        self.networks_path = resolve_one(base, self.networks_path);
         self.audit_log = resolve_one(base, self.audit_log);
         self
     }
@@ -223,6 +239,8 @@ impl Config {
             .unwrap_or_else(|| PathBuf::from(DEFAULT_CLIENTS_PATH));
         let access_path =
             optional_path(map, "ACCESS_PATH").unwrap_or_else(|| PathBuf::from(DEFAULT_ACCESS_PATH));
+        let networks_path = optional_path(map, "NETWORKS_PATH")
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_NETWORKS_PATH));
         let audit_log =
             optional_path(map, "AUDIT_LOG").unwrap_or_else(|| state_dir.join("access.log"));
 
@@ -236,6 +254,7 @@ impl Config {
             key_path,
             clients_path,
             access_path,
+            networks_path,
             audit_log,
         })
     }
@@ -463,6 +482,24 @@ mod tests {
         assert!(!valid_share_name("-x"));
         assert!(!valid_share_name("a b"));
         assert!(!valid_share_name(""));
+    }
+
+    #[test]
+    fn network_names_share_the_identifier_grammar() {
+        assert!(valid_network_name("home"));
+        assert!(valid_network_name("office-2"));
+        assert!(!valid_network_name("Home"));
+        assert!(!valid_network_name(""));
+    }
+
+    #[test]
+    fn networks_path_defaults_next_to_the_config() {
+        let base = Path::new("/etc/lanpull");
+        let config = Config::parse("SHARE_reports=/srv/r\nSERVER_IP=127.0.0.1\n", base).unwrap();
+        assert_eq!(
+            config.networks_path,
+            PathBuf::from("/etc/lanpull/lanpull.networks.json")
+        );
     }
 
     #[test]

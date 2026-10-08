@@ -76,6 +76,9 @@ pub struct AccountSummary {
     pub bytes: u64,
     /// Number of rejected requests.
     pub rejected: u64,
+    /// Rejected requests by reason, sorted by reason.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub by_reason: BTreeMap<String, u64>,
 }
 
 /// The whole audit report.
@@ -83,32 +86,6 @@ pub struct AccountSummary {
 pub struct Report {
     /// Aggregates, one per account, sorted by name.
     pub accounts: Vec<AccountSummary>,
-}
-
-impl Report {
-    /// Render the report as human-readable lines.
-    pub fn lines(&self) -> Vec<String> {
-        if self.accounts.is_empty() {
-            return vec!["no requests recorded".to_string()];
-        }
-        let mut lines = Vec::new();
-        for account in &self.accounts {
-            lines.push(format!(
-                "{}: last {} from {} files={} bytes={} rejected={}",
-                account.user,
-                account.last_seen,
-                if account.last_host.is_empty() {
-                    "<unknown>"
-                } else {
-                    account.last_host.as_str()
-                },
-                account.files,
-                account.bytes,
-                account.rejected
-            ));
-        }
-        lines
-    }
 }
 
 /// Summarize the audit log, optionally filtered by account and start time.
@@ -165,8 +142,17 @@ pub fn summarize(
             summary.last_host.clone_from(&record.host);
         }
 
-        if record.reason.is_some() || record.status == 401 {
+        if let Some(reason) = record.reason.as_deref() {
             summary.rejected = summary.rejected.saturating_add(1);
+            let counter = summary.by_reason.entry(reason.to_string()).or_insert(0);
+            *counter = counter.saturating_add(1);
+        } else if record.status == 401 {
+            summary.rejected = summary.rejected.saturating_add(1);
+            let counter = summary
+                .by_reason
+                .entry(format!("http_{}", record.status))
+                .or_insert(0);
+            *counter = counter.saturating_add(1);
         } else if (record.status == 200 || record.status == 206) && is_data_file(&record.path) {
             summary.files = summary.files.saturating_add(1);
             summary.bytes = summary.bytes.saturating_add(record.bytes);
@@ -176,4 +162,48 @@ pub fn summarize(
     Ok(Report {
         accounts: accounts.into_values().collect(),
     })
+}
+
+/// Read every audit record matching the filters, in file order.
+///
+/// Used by `report --tail`; unlike [`summarize`], the records are returned
+/// verbatim so the caller can show the most recent ones.
+pub fn read_records(
+    path: &Path,
+    user_filter: Option<&str>,
+    since_epoch: Option<i64>,
+) -> Result<Vec<Record>> {
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+
+    let mut records = Vec::new();
+    for line in BufReader::new(file).lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let record: Record = match serde_json::from_str(&line) {
+            Ok(record) => record,
+            Err(e) => {
+                tracing::warn!(error = %e, "skipping malformed audit line");
+                continue;
+            }
+        };
+        if let Some(filter) = user_filter {
+            if record.user != filter {
+                continue;
+            }
+        }
+        if let Some(cutoff) = since_epoch {
+            let epoch = timeutil::parse_iso8601(&record.ts).unwrap_or(0);
+            if epoch < cutoff {
+                continue;
+            }
+        }
+        records.push(record);
+    }
+    Ok(records)
 }

@@ -69,6 +69,9 @@ pub struct InitArgs {
     /// Overwrite an existing configuration file.
     #[arg(long)]
     pub force: bool,
+    /// Show what would be created without writing anything.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 /// Dispatch a share operation.

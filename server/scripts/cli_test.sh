@@ -168,6 +168,15 @@ assert_rc "init refuses to overwrite without --force" 2
 run "$binary" init --config "$tmp/init.conf" --share "default=$tmp/ishare" \
     --state-dir "$tmp/istate" --server-ip 127.0.0.1 --force
 assert_rc "init --force overwrites" 0
+run "$binary" init --config "$tmp/dry.conf" --share "default=$tmp/dryshare" \
+    --state-dir "$tmp/drystate" --server-ip 127.0.0.1 --dry-run
+assert_rc "init --dry-run exits 0" 0
+assert_out_has "init --dry-run reports the plan" "would write"
+if [ -f "$tmp/dry.conf" ]; then
+    fail_msg "init --dry-run wrote the configuration"
+else
+    pass "init --dry-run writes nothing"
+fi
 if [ "$(id -u)" -ne 0 ]; then
     run "$binary" init --config /etc/lanpull/lanpull.conf --share "default=$tmp/ishare" \
         --state-dir "$tmp/istate" --server-ip 127.0.0.1
@@ -298,7 +307,12 @@ run "$binary" --json account list --config "$conf"
 assert_json_ok "account list --json is an ok envelope"
 run "$binary" account passwd e2e --config "$conf"
 assert_rc "account passwd exits 0" 0
-assert_out_has "account passwd prints a password" "password for e2e:"
+assert_out_has "account passwd reports the rotation" "rotated password for e2e"
+assert_err_has "account passwd prints the password on stderr" "password for e2e:"
+run "$binary" --json account passwd e2e --config "$conf"
+assert_rc "account passwd --json exits 0" 0
+assert_out_has "account passwd --json is an ok envelope" '"status": "ok"'
+assert_out_not_has "account passwd --json does not put the password on stdout" "password for e2e:"
 run "$binary" account passwd nope --config "$conf"
 assert_rc "account passwd rejects an unknown account" 1
 run "$binary" account export e2e --to "$tmp/export" --config "$conf"
@@ -308,20 +322,45 @@ assert_rc "account export rejects an unknown account" 1
 run "$binary" account arm e2e --ttl 15m --config "$conf"
 assert_rc "account arm exits 0" 0
 assert_out_has "account arm reports the window" "armed e2e for"
+run "$binary" status --arm --config "$conf"
+assert_rc "status --arm exits 0" 0
+assert_out_has "status --arm lists the armed account" "armed e2e"
+run "$binary" --json account arm e2e --ttl 15m --config "$conf"
+assert_json_ok "account arm --json is an ok envelope"
+assert_out_has "account arm --json carries the expiry" '"expires_at"'
+run "$binary" account arm --all --ttl 15m --config "$conf"
+assert_rc "account arm --all exits 0" 0
 run "$binary" account arm --config "$conf"
 assert_rc "account arm without a name is a usage error" 2
 run "$binary" account arm nope --ttl 15m --config "$conf"
 assert_rc "account arm rejects an unknown account" 1
+assert_err_has "account arm unknown-account hint" "account list"
+run "$binary" account arm e2e nope --ttl 15m --config "$conf"
+assert_rc "account arm rejects a batch with an unknown account" 1
 run "$binary" account arm e2e --ttl bogus --config "$conf"
 assert_rc "account arm rejects an invalid ttl" 1
+run "$binary" account arm e2e --all --config "$conf"
+assert_rc "account arm rejects names with --all" 2
 run "$binary" account disarm e2e --config "$conf"
 assert_rc "account disarm exits 0" 0
 run "$binary" account disarm e2e --config "$conf"
 assert_out_has "account disarm is idempotent" "was not armed"
+run "$binary" account arm e2e --ttl 15m --config "$conf"
+run "$binary" account disarm --all --config "$conf"
+assert_rc "account disarm --all without --yes needs a terminal" 2
+assert_err_has "disarm --all confirmation hint" "pass --yes"
+run "$binary" account disarm --all --yes --config "$conf"
+assert_rc "account disarm --all --yes exits 0" 0
+run "$binary" status --arm --config "$conf"
+assert_out_has "status --arm is empty after disarm" "armed: none"
+run "$binary" account arm e2e --ttl 15m --config "$conf"
 run "$binary" account remove nope --yes --config "$conf"
 assert_rc "account remove rejects an unknown account" 1
 run "$binary" account remove e2e --yes --config "$conf"
 assert_rc "account remove --yes exits 0" 0
+assert_err_has "account remove clears the arm window" "arm window was cleared"
+run "$binary" status --arm --config "$conf"
+assert_out_has "status --arm is empty after removal" "armed: none"
 run "$binary" account list --config "$conf"
 assert_out_has "account list is empty after removal" "no accounts"
 
@@ -345,7 +384,81 @@ run "$binary" account add a --output "$need/mirror" --config "$need/lanpull.conf
 assert_rc "account add without a certificate fails" 1
 assert_err_has "account add certificate hint" "lanpull cert"
 
-# --- 8. misc ---
+# --- 8. network ---
+section "network"
+run "$binary" network add home --ip 10.0.0.1 --config "$conf"
+assert_rc "network add registers a profile" 0
+assert_out_has "network add reports the profile" "added network home"
+run "$binary" network add home --ip 10.0.0.1 --config "$conf"
+assert_rc "network add rejects a duplicate" 1
+assert_err_has "network duplicate hint" "already exists"
+run "$binary" network add Bad --ip 10.0.0.1 --config "$conf"
+assert_rc "network add rejects an invalid name" 2
+run "$binary" network add office --ip 10.0.0.2 --generate --config "$conf"
+assert_rc "network add --generate creates the profile" 0
+if [ -f "$state/net-office.crt" ] && [ -f "$state/net-office.key" ]; then
+    pass "network add --generate wrote the certificate and key"
+else
+    fail_msg "network add --generate did not write the certificate"
+fi
+run "$binary" network list --config "$conf"
+assert_rc "network list exits 0" 0
+assert_out_has "network list shows the profile" "home"
+run "$binary" network show office --config "$conf"
+assert_rc "network show exits 0" 0
+assert_out_has "network show reports the address" "10.0.0.2"
+run "$binary" --json network list --config "$conf"
+assert_json_ok "network list --json is an ok envelope"
+run "$binary" network use office --dry-run --config "$conf"
+assert_rc "network use --dry-run exits 0" 0
+assert_out_has "network use --dry-run reports the plan" "would set SERVER_IP=10.0.0.2"
+run "$binary" config get SERVER_IP --config "$conf"
+assert_out_eq "network use --dry-run writes nothing" "127.0.0.1"
+run "$binary" network use office --config "$conf"
+assert_rc "network use applies the profile" 0
+assert_out_has "network use reports activation" "activated network office"
+run "$binary" config get SERVER_IP --config "$conf"
+assert_out_eq "network use sets SERVER_IP" "10.0.0.2"
+run "$binary" config get CERT_PATH --config "$conf"
+assert_out_eq "network use sets CERT_PATH" "$state/net-office.crt"
+run "$binary" network use home --config "$conf"
+assert_rc "network use switches to another profile" 0
+before=$(stat -c '%Y' "$state/net-office.crt")
+run "$binary" network use office --config "$conf"
+after=$(stat -c '%Y' "$state/net-office.crt")
+if [ "$before" = "$after" ]; then
+    pass "network use does not regenerate an existing certificate"
+else
+    fail_msg "network use regenerated an existing certificate"
+fi
+run "$binary" network show --config "$conf"
+assert_out_has "network show defaults to the active profile" "office"
+run "$binary" network use nope --config "$conf"
+assert_rc "network use rejects an unknown profile" 1
+assert_err_has "unknown profile hint" "network list"
+run "$binary" network remove nope --config "$conf"
+assert_rc "network remove rejects an unknown profile" 1
+run "$binary" network remove office --delete-cert --config "$conf"
+assert_rc "network remove --delete-cert without --yes needs a terminal" 2
+assert_err_has "delete-cert confirmation hint" "pass --yes"
+run "$binary" network remove office --delete-cert --yes --config "$conf"
+assert_rc "network remove --delete-cert --yes exits 0" 0
+if [ ! -f "$state/net-office.crt" ] && [ ! -f "$state/net-office.key" ]; then
+    pass "network remove --delete-cert removed the certificate and key"
+else
+    fail_msg "network remove --delete-cert left the certificate behind"
+fi
+run "$binary" network remove home --yes --config "$conf"
+assert_rc "network remove exits 0" 0
+run "$binary" network list --config "$conf"
+assert_out_has "network list is empty after removal" "no networks"
+# Restore the original certificate so later sections see the documented layout.
+run "$binary" config set SERVER_IP 127.0.0.1 --config "$conf"
+run "$binary" config set CERT_PATH "$state/server.crt" --config "$conf"
+run "$binary" config set KEY_PATH "$state/server.key" --config "$conf"
+assert_rc "network section restores the server address" 0
+
+# --- 9. misc ---
 section "misc"
 run "$binary" status --config "$conf"
 assert_rc "status exits 0" 0
@@ -357,6 +470,15 @@ run "$binary" report --since bogus --config "$conf"
 assert_rc "report rejects an invalid --since" 1
 run "$binary" report --user e2e --config "$conf"
 assert_rc "report --user exits 0" 0
+run "$binary" report --reasons --config "$conf"
+assert_rc "report --reasons exits 0" 0
+run "$binary" report --rejected --config "$conf"
+assert_rc "report --rejected exits 0" 0
+run "$binary" report --tail 5 --config "$conf"
+assert_rc "report --tail exits 0" 0
+assert_out_has "report --tail on an empty log says there are no requests" "no requests recorded"
+run "$binary" report --tail 5 --reasons --config "$conf"
+assert_rc "report --tail conflicts with --reasons" 2
 run "$binary" audit --config "$conf"
 assert_rc "audit exits 0" 0
 assert_out_has "audit lists the configuration artifact" "config"
@@ -374,7 +496,7 @@ run "$binary" clean --config "$conf"
 assert_rc "clean with nothing left exits 0" 0
 assert_out_has "clean reports nothing to do" "nothing to clean"
 
-# --- 9. Streams and JSON ---
+# --- 10. Streams and JSON ---
 section "streams and JSON"
 run "$binary" --config "$conf" access client add future 'default:**'
 assert_rc "warning command exits 0" 0

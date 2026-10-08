@@ -175,7 +175,8 @@ mod tests {
         clippy::expect_used,
         clippy::panic,
         clippy::indexing_slicing,
-        clippy::missing_assert_message
+        clippy::missing_assert_message,
+        clippy::assert_is_empty
     )]
 
     use super::*;

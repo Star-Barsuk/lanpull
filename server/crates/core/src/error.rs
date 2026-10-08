@@ -69,6 +69,9 @@ pub enum Error {
     /// Account management failed.
     #[error("account error: {0}")]
     Account(String),
+    /// Network profile management failed.
+    #[error("network error: {0}")]
+    Network(String),
     /// Password hashing or verification failed.
     #[error("password error: {0}")]
     Password(String),
@@ -104,6 +107,7 @@ impl Error {
             | Self::UnsafePath(_)
             | Self::Manifest(_)
             | Self::Account(_)
+            | Self::Network(_)
             | Self::Password(_)
             | Self::Certificate(_)
             | Self::Server(_)
@@ -120,6 +124,8 @@ impl Error {
                 Some("run 'lanpull init' to create the configuration and state")
             }
             Self::Certificate(_) => Some("run 'lanpull cert' to generate the certificate"),
+            Self::Account(_) => Some("run 'lanpull account list' to see accounts"),
+            Self::Network(_) => Some("run 'lanpull network list' to see networks"),
             Self::Denied(_) => {
                 Some("inspect 'lanpull account list' and 'lanpull access client list'")
             }

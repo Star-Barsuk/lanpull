@@ -46,13 +46,10 @@ pub enum AccountCommand {
     },
     /// Export a staged client folder for transfer to the client.
     Export(ExportArgs),
-    /// Authorize one account (or all with `--all`) for a short window.
+    /// Authorize one or more accounts (or all with `--all`) for a short window.
     Arm(ArmArgs),
-    /// Clear an account's arm window.
-    Disarm {
-        /// Account name.
-        name: String,
-    },
+    /// Clear one or more accounts' arm windows (or all with `--all`).
+    Disarm(DisarmArgs),
 }
 
 impl AccountCommand {
@@ -65,7 +62,7 @@ impl AccountCommand {
             Self::Passwd { .. } => "account passwd",
             Self::Export(_) => "account export",
             Self::Arm(_) => "account arm",
-            Self::Disarm { .. } => "account disarm",
+            Self::Disarm(_) => "account disarm",
         }
     }
 }
@@ -112,14 +109,27 @@ pub struct ExportArgs {
 /// Arguments for `account arm`.
 #[derive(Debug, clap::Args)]
 pub struct ArmArgs {
-    /// Account name (omit with `--all`).
-    pub name: Option<String>,
-    /// Arm every account.
-    #[arg(long)]
+    /// Account names (omit with `--all`).
+    pub names: Vec<String>,
+    /// Arm every non-local account.
+    #[arg(long, conflicts_with = "names")]
     pub all: bool,
     /// Window length, for example `15m` or `30m`.
     #[arg(long, default_value = "15m")]
     pub ttl: String,
+}
+
+/// Arguments for `account disarm`.
+#[derive(Debug, clap::Args)]
+pub struct DisarmArgs {
+    /// Account names (omit with `--all`).
+    pub names: Vec<String>,
+    /// Clear every account's arm window.
+    #[arg(long, conflicts_with = "names")]
+    pub all: bool,
+    /// Do not ask for confirmation.
+    #[arg(long)]
+    pub yes: bool,
 }
 
 /// One row of `account list` output.
@@ -140,7 +150,7 @@ pub fn run(config_path: &Path, command: AccountCommand) -> Result<Outcome> {
         AccountCommand::Passwd { name, output } => passwd(config_path, &name, output.as_deref()),
         AccountCommand::Export(args) => export(config_path, args),
         AccountCommand::Arm(args) => arm(config_path, args),
-        AccountCommand::Disarm { name } => disarm(config_path, &name),
+        AccountCommand::Disarm(args) => disarm(config_path, args),
     }
 }
 
@@ -208,7 +218,15 @@ fn remove(config_path: &Path, name: &str, yes: bool, dry_run: bool) -> Result<Ou
     if dir.is_dir() {
         std::fs::remove_dir_all(&dir)?;
     }
+    let mut arm = ArmState::load(&config.arm_path())?;
+    let was_armed = arm.disarm(name);
+    if was_armed {
+        arm.save(&config.arm_path())?;
+    }
     let mut outcome = Outcome::new().line(format!("removed account {name}"));
+    if was_armed {
+        outcome = outcome.warn(format!("{name} was armed; its arm window was cleared"));
+    }
     report_regeneration(&config, &mut outcome)?;
     outcome.data = serde_json::json!({ "account": name, "dry_run": false });
     Ok(outcome)
@@ -233,21 +251,25 @@ fn list(config_path: &Path) -> Result<Outcome> {
     let lines = if rows.is_empty() {
         vec!["no accounts".to_string()]
     } else {
-        format_rows(
-            &rows
-                .iter()
-                .map(|row| {
-                    let scope = if row.local { " local" } else { "" };
-                    let ip = row.allowed_ip.as_deref().unwrap_or("any");
-                    vec![
-                        row.name.clone(),
-                        ip.to_string(),
-                        scope.to_string(),
-                        format!("[{}]", row.rules.join(", ")),
-                    ]
-                })
-                .collect::<Vec<_>>(),
-        )
+        let mut table = vec![vec![
+            "NAME".to_string(),
+            "IP".to_string(),
+            "SCOPE".to_string(),
+            "RULES".to_string(),
+        ]];
+        for row in &rows {
+            table.push(vec![
+                row.name.clone(),
+                row.allowed_ip.as_deref().unwrap_or("any").to_string(),
+                if row.local {
+                    "local".to_string()
+                } else {
+                    String::new()
+                },
+                format!("[{}]", row.rules.join(", ")),
+            ]);
+        }
+        format_rows(&table)
     };
     Ok(Outcome::text(lines).with_data(&rows))
 }
@@ -277,7 +299,14 @@ fn passwd(config_path: &Path, name: &str, output: Option<&Path>) -> Result<Outco
         lanpull_core::account::restage(&config, name, output, &auth)?;
     }
     let staged_present = staged.is_file();
-    let mut outcome = Outcome::new().line(format!("password for {name}: {password}"));
+    // The password is a secret: it goes to stderr (diagnostics) so it never
+    // lands in stdout data or the JSON envelope.
+    eprintln!("password for {name}: {password}");
+    let mut outcome = Outcome::new().line(if staged_present {
+        format!("rotated password for {name} (auth file updated)")
+    } else {
+        format!("rotated password for {name}")
+    });
     if !staged_present {
         outcome = outcome.warn(format!(
             "no staged folder for {name}; pass --output <dir> to rebuild it"
@@ -285,8 +314,7 @@ fn passwd(config_path: &Path, name: &str, output: Option<&Path>) -> Result<Outco
     }
     outcome.data = serde_json::json!({
         "account": name,
-        "password": password,
-        "staged": if staged_present { Some(staged) } else { None },
+        "staged": staged_present,
     });
     Ok(outcome)
 }
@@ -337,7 +365,7 @@ fn export(config_path: &Path, args: ExportArgs) -> Result<Outcome> {
     Ok(outcome)
 }
 
-/// Arm one account or all accounts.
+/// Arm one or more accounts, or every non-local account.
 fn arm(config_path: &Path, args: ArmArgs) -> Result<Outcome> {
     let config = Config::load(config_path)?;
     let accounts = Clients::load(&config.clients_path)?;
@@ -345,57 +373,122 @@ fn arm(config_path: &Path, args: ArmArgs) -> Result<Outcome> {
     let now = timeutil::now_unix();
     let expires = now.saturating_add(seconds);
 
-    let mut state = ArmState::load(&config.arm_path())?;
-    if args.all {
+    let targets: Vec<String> = if args.all {
         if accounts.is_empty() {
             return Err(Error::Account("no accounts to arm".to_string()));
         }
-        for account in accounts.iter() {
-            if !account.local {
-                state.arm(&account.name, expires);
-            }
-        }
+        accounts
+            .iter()
+            .filter(|account| !account.local)
+            .map(|account| account.name.clone())
+            .collect()
     } else {
-        let name = args
-            .name
-            .ok_or_else(|| Error::Usage("provide a name or --all".to_string()))?;
-        if accounts.get(&name).is_none() {
-            return Err(Error::Account(format!("no such account: {name}")));
+        if args.names.is_empty() {
+            return Err(Error::Usage(
+                "provide one or more names or --all".to_string(),
+            ));
         }
-        state.arm(&name, expires);
+        ensure_known(&accounts, &args.names)?;
+        args.names.clone()
+    };
+
+    let mut state = ArmState::load(&config.arm_path())?;
+    let mut outcome = Outcome::new();
+    let mut data = Vec::new();
+    for name in &targets {
+        if accounts.get(name).is_some_and(|account| account.local) {
+            outcome = outcome.warn(format!("local account {name} needs no arming; skipped"));
+            continue;
+        }
+        state.arm(name, expires);
+        outcome = outcome.line(format!(
+            "armed {name} for {}",
+            status::format_duration(seconds)
+        ));
+        data.push(serde_json::json!({
+            "account": name,
+            "expires_at": timeutil::iso8601(expires),
+            "remaining_secs": seconds,
+        }));
     }
     state.save(&config.arm_path())?;
-
-    let armed: Vec<serde_json::Value> = state
-        .armed_entries(now)
-        .into_iter()
-        .map(|(account, remaining)| serde_json::json!({ "account": account, "remaining_secs": remaining }))
-        .collect();
-    let mut outcome = Outcome::new();
-    for (account, remaining) in state.armed_entries(now) {
-        outcome = outcome.line(format!(
-            "armed {account} for {}",
-            status::format_duration(remaining)
-        ));
-    }
-    outcome.data = serde_json::json!({ "accounts": armed, "ttl": args.ttl });
+    outcome.data = serde_json::json!({ "accounts": data, "ttl": args.ttl });
     Ok(outcome)
 }
 
-/// Clear an arm window.
-fn disarm(config_path: &Path, name: &str) -> Result<Outcome> {
+/// Clear one or more accounts' arm windows, or every entry with `--all`.
+fn disarm(config_path: &Path, args: DisarmArgs) -> Result<Outcome> {
     let config = Config::load(config_path)?;
+    let accounts = Clients::load(&config.clients_path)?;
     let mut state = ArmState::load(&config.arm_path())?;
-    let was_armed = state.disarm(name);
-    if was_armed {
+
+    if args.all {
+        if state.armed.is_empty() {
+            return Ok(Outcome::new()
+                .line("no accounts were armed")
+                .with_data(&serde_json::json!({ "accounts": [], "all": true })));
+        }
+        crate::confirm::require(args.yes, "disarm all accounts")?;
+        let names: Vec<String> = state.armed.keys().cloned().collect();
+        for name in &names {
+            state.disarm(name);
+        }
+        state.save(&config.arm_path())?;
+        let mut outcome = Outcome::new();
+        for name in &names {
+            outcome = outcome.line(format!("disarmed {name}"));
+        }
+        let data: Vec<serde_json::Value> = names
+            .iter()
+            .map(|name| serde_json::json!({ "account": name, "was_armed": true }))
+            .collect();
+        outcome.data = serde_json::json!({ "accounts": data, "all": true });
+        return Ok(outcome);
+    }
+
+    if args.names.is_empty() {
+        return Err(Error::Usage(
+            "provide one or more names or --all".to_string(),
+        ));
+    }
+    ensure_known(&accounts, &args.names)?;
+
+    let mut outcome = Outcome::new();
+    let mut data = Vec::new();
+    let mut changed = false;
+    for name in &args.names {
+        let was_armed = state.disarm(name);
+        changed |= was_armed;
+        let line = if was_armed {
+            format!("disarmed {name}")
+        } else {
+            format!("{name} was not armed")
+        };
+        outcome = outcome.line(line);
+        data.push(serde_json::json!({ "account": name, "was_armed": was_armed }));
+    }
+    if changed {
         state.save(&config.arm_path())?;
     }
-    let line = if was_armed {
-        format!("disarmed {name}")
+    outcome.data = serde_json::json!({ "accounts": data, "all": false });
+    Ok(outcome)
+}
+
+/// Reject the whole request when any named account does not exist.
+///
+/// The check runs before any mutation, so a batch is all-or-nothing.
+fn ensure_known(accounts: &Clients, names: &[String]) -> Result<()> {
+    let unknown: Vec<String> = names
+        .iter()
+        .filter(|name| accounts.get(name).is_none())
+        .cloned()
+        .collect();
+    if unknown.is_empty() {
+        Ok(())
     } else {
-        format!("{name} was not armed")
-    };
-    Ok(Outcome::new()
-        .line(line)
-        .with_data(&serde_json::json!({ "account": name, "was_armed": was_armed })))
+        Err(Error::Account(format!(
+            "no such account(s): {}",
+            unknown.join(", ")
+        )))
+    }
 }

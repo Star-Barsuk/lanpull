@@ -9,6 +9,8 @@ use std::path::Path;
 
 use walkdir::WalkDir;
 
+use serde::Serialize;
+
 use lanpull_core::arm::ArmState;
 use lanpull_core::clients::Clients;
 use lanpull_core::config::Config;
@@ -52,42 +54,67 @@ pub fn startup_warnings(config: &Config) -> Vec<String> {
     warnings
 }
 
+/// An armed account and its remaining window.
+#[derive(Debug, Clone, Serialize)]
+pub struct ArmedAccount {
+    /// Account name.
+    pub account: String,
+    /// Seconds left in the arm window.
+    pub remaining_secs: i64,
+}
+
+/// Structured operator status: manifest summaries, warnings, and arm state.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct StatusReport {
+    /// One line per present share manifest.
+    pub manifests: Vec<String>,
+    /// Actionable warnings (stale manifests, symlinks, policy problems).
+    pub warnings: Vec<String>,
+    /// Armed accounts that still exist.
+    pub armed: Vec<ArmedAccount>,
+}
+
 /// Full status output for the operator.
-pub fn run(config: &Config) -> Result<Vec<String>> {
-    let mut lines = Vec::new();
+///
+/// Manifest summaries and the arm state go to stdout; the actionable warnings
+/// are returned separately so the caller can route them to stderr and to the
+/// JSON envelope's `warnings` field.
+pub fn report(config: &Config) -> Result<StatusReport> {
+    let mut manifests = Vec::new();
+    let mut warnings = Vec::new();
 
     for (share, dir) in &config.shares {
         match Manifest::load(&config.manifest_path(share)) {
             Ok(manifest) => {
-                lines.push(format!(
+                manifests.push(format!(
                     "manifest {share}: {} files, generated_at {}",
                     manifest.files.len(),
                     manifest.generated_at
                 ));
-                lines.extend(
+                warnings.extend(
                     freshness_warnings(dir, &manifest)
                         .into_iter()
                         .map(|warning| format!("{share}: {warning}")),
                 );
             }
-            Err(_) => lines.push(format!(
-                "manifest {share}: MISSING (run 'lanpull share rescan')"
+            Err(_) => warnings.push(format!(
+                "{share}: manifest MISSING (run 'lanpull share rescan')"
             )),
         }
-        lines.extend(
+        warnings.extend(
             walk_warnings(dir)?
                 .into_iter()
                 .map(|warning| format!("{share}: {warning}")),
         );
     }
 
-    lines.extend(access_warnings(config));
+    warnings.extend(access_warnings(config));
 
     let now = timeutil::now_unix();
     let arm = ArmState::load(&config.arm_path())?;
     // Arm entries outlive a removed account; only list accounts that still exist.
     let known = Clients::load(&config.clients_path).ok();
-    let armed: Vec<(String, i64)> = arm
+    let armed = arm
         .armed_entries(now)
         .into_iter()
         .filter(|(name, _)| {
@@ -95,19 +122,17 @@ pub fn run(config: &Config) -> Result<Vec<String>> {
                 .as_ref()
                 .is_none_or(|clients| clients.get(name).is_some())
         })
+        .map(|(account, remaining_secs)| ArmedAccount {
+            account,
+            remaining_secs,
+        })
         .collect();
-    if armed.is_empty() {
-        lines.push("armed: none".to_string());
-    } else {
-        for (name, remaining) in armed {
-            lines.push(format!(
-                "armed: {name} ({} left)",
-                format_duration(remaining)
-            ));
-        }
-    }
 
-    Ok(lines)
+    Ok(StatusReport {
+        manifests,
+        warnings,
+        armed,
+    })
 }
 
 /// Warn when files in the share are newer than the manifest.

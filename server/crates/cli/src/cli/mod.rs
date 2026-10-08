@@ -2,7 +2,7 @@
 //!
 //! The taxonomy groups operations by object:
 //! `init`, `serve`, `status`, `account`, `access`, `share`, `service`,
-//! `config`, `cert`, `audit`, `report`, `clean`.
+//! `config`, `network`, `cert`, `audit`, `report`, `clean`.
 //!
 //! Every command writes its result to stdout and its diagnostics to stderr.
 //! With `--json` stdout carries one envelope document instead of text; the
@@ -12,6 +12,7 @@ pub mod access;
 pub mod account;
 pub mod config;
 pub mod misc;
+pub mod network;
 pub mod output;
 pub mod service;
 pub mod share;
@@ -23,6 +24,7 @@ use clap::{Parser, Subcommand};
 use crate::cli::access::AccessCommand;
 use crate::cli::account::AccountCommand;
 use crate::cli::config::ConfigCommand;
+use crate::cli::network::NetworkCommand;
 pub use crate::cli::output::{emit, emit_error, Outcome};
 use crate::cli::service::ServiceCommand;
 use crate::cli::share::ShareCommand;
@@ -57,7 +59,7 @@ pub enum Command {
     /// Run the HTTPS server (production uses the systemd unit).
     Serve,
     /// Warn on a stale manifest and show armed accounts.
-    Status,
+    Status(misc::StatusArgs),
     /// Manage accounts, passwords, and the arm window.
     Account {
         /// Account operation.
@@ -88,6 +90,12 @@ pub enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    /// Manage named per-network address and TLS profiles.
+    Network {
+        /// Network operation.
+        #[command(subcommand)]
+        command: NetworkCommand,
+    },
     /// Generate the self-signed TLS certificate.
     Cert {
         /// Overwrite an existing certificate and key.
@@ -108,12 +116,13 @@ impl Command {
         match self {
             Self::Init(_) => "init",
             Self::Serve => "serve",
-            Self::Status => "status",
+            Self::Status(_) => "status",
             Self::Account { command } => command.path(),
             Self::Access { command } => command.path(),
             Self::Share { command } => command.path(),
             Self::Service { command } => command.path(),
             Self::Config { command } => command.path(),
+            Self::Network { command } => command.path(),
             Self::Cert { .. } => "cert",
             Self::Audit => "audit",
             Self::Report(_) => "report",

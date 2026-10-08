@@ -112,6 +112,7 @@ fn build(accounts: Vec<Account>, access_text: &str) -> (AppState, tempfile::Temp
         key_path: state_dir.join("server.key"),
         clients_path,
         access_path,
+        networks_path: state_dir.join("lanpull.networks.json"),
         audit_log: state_dir.join("access.log"),
     };
 

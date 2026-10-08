@@ -87,14 +87,16 @@ small pull-only mirror for a trusted local network.
            share rescan     regenerate per-share and per-account manifests
            account add      create an account + stage a ready client folder
            access           manage the JSON policy (public set + per-client deltas)
-           account arm      authorize a client for a short window
+           account arm      authorize clients for a short window
            report           who pulled what (from the audit log)
            cert             self-signed certificate (SAN = IPs + localhost)
+           network          per-network address + certificate profiles
            status           warn on stale manifests / symlinks / policy
          /etc/lanpull/lanpull.conf      configuration (mode 640, root:group)
          /etc/lanpull/lanpull.clients   accounts (argon2, mode 600)
-         /etc/lanpull/lanpull.access.json access policy (mode 600)
-         $STATE_DIR/                manifests, caches, TLS material, log
+          /etc/lanpull/lanpull.access.json access policy (mode 600)
+          /etc/lanpull/lanpull.networks.json network profiles (mode 600)
+          $STATE_DIR/                manifests, caches, TLS material, log
                      |
                      |  HTTPS GET (Range, HTTP Basic), LAN only
                      v
@@ -234,8 +236,9 @@ lanpull account arm --all --ttl 15m
 ./pull.py
 
 # 8. Inspect, then close the window.
+lanpull status --arm                          # remaining time per account
 lanpull report --since 1h
-lanpull account disarm <client-name>
+lanpull account disarm --all                  # or: lanpull account disarm <client-name>...
 
 # 9. Later rounds: edit the share, rescan, re-arm, pull again.
 lanpull share rescan && lanpull account arm --all --ttl 15m
@@ -281,6 +284,7 @@ Create the configuration and state for this machine.
 | `--port <port>` | Listen port (default `8000`). |
 | `--server-ip <ip>` | Address clients use; embedded in the certificate. Derived from the routing table when omitted. |
 | `--force` | Overwrite an existing configuration file. |
+| `--dry-run` | Print what would be created without writing anything. |
 
 `init` creates the configuration directory, the share directories, the state
 directory (when permitted), and a commented `.lanpullignore` template in each
@@ -296,10 +300,14 @@ the JSON envelope; it logs to stderr and stops on `SIGINT`/`SIGTERM`.
 
 ### `lanpull status`
 
-Warn on a stale manifest, symlinks, reserved-prefix entries, and policy
-problems, and show the armed accounts. Exits `0`; the warnings are on stderr
-(with `--json`, in the envelope's `warnings`). "Clean" prints
-`status is clean`.
+Show per-share manifest summaries and the armed accounts, and warn (on stderr)
+about a stale manifest, symlinks, reserved-prefix entries, and policy problems.
+Exits `0`; with `--json` the warnings are in the envelope's `warnings`. "Clean"
+prints `status is clean`.
+
+| Option | Meaning |
+| --- | --- |
+| `--arm` | Show only the armed accounts and their remaining windows. This is a cheap check that reads the arm state and never walks the shares. |
 
 ### `lanpull cert`
 
@@ -322,7 +330,8 @@ Without `--force`, an existing certificate is a usage error.
 
 A share is never removed by a command: delete its `SHARE_<name>` line by hand,
 or repoint it with `config set`. Against the canonical configuration, `share
-add` needs root.
+add` needs root. Any command that regenerates manifests prints one line per
+share; `-v` adds a per-account breakdown.
 
 ### `lanpull access`
 
@@ -351,12 +360,12 @@ when the account is created. A rule that names an unknown share is rejected.
 | Command | Arguments | Options | Purpose |
 | --- | --- | --- | --- |
 | `account add` | `<name>` | `--output <dir>`, `--ip <ip>`, `--local`, `--dry-run` | Create an account and stage a client folder. |
-| `account remove` | `<name>` | `--yes`, `--dry-run` | Revoke an account and drop its policy deltas. |
+| `account remove` | `<name>` | `--yes`, `--dry-run` | Revoke an account, drop its policy deltas, and clear its arm window. |
 | `account list` | — | — | List accounts with their IP, scope, and effective rules. |
-| `account passwd` | `<name>` | `--output <dir>` | Rotate the password and refresh the staged `auth` file. |
+| `account passwd` | `<name>` | `--output <dir>` | Rotate the password and refresh the staged `auth` file. The new password is printed to stderr, never to stdout or the JSON envelope. |
 | `account export` | `<name>` | `--to <dir>`, `--move`, `--force`, `--dry-run` | Copy the staged folder for transfer to the client. |
-| `account arm` | `[<name>]` | `--all`, `--ttl <duration>` (default `15m`) | Authorize one or all accounts for a window. |
-| `account disarm` | `<name>` | — | Clear an account's arm window. |
+| `account arm` | `[<name>...]` | `--all`, `--ttl <duration>` (default `15m`) | Authorize one or more accounts (or all non-local accounts with `--all`) for a window. |
+| `account disarm` | `[<name>...]` | `--all`, `--yes` | Clear one or more arm windows (or every one with `--all`; `--all` prompts unless `--yes`). |
 
 `account add` requires, in order: a staged client bundle (`make install`), at
 least one access rule for the account, and a certificate. It generates a random
@@ -377,14 +386,46 @@ from any LAN address.
 | Command | Arguments | Options | Purpose |
 | --- | --- | --- | --- |
 | `config show` | — | — | Print the resolved configuration and its paths. |
-| `config get` | `<key>` | — | Print one value. |
+| `config get` | `<key>` | — | Print one value; `SHARE_<name>` returns a share directory. |
 | `config set` | `<key> <value>` | `--dry-run` | Set one value. |
 | `config path` | — | — | Print the resolved configuration file path. |
 
 `config set` accepts `STATE_DIR`, `BIND`, `PORT`, `SERVER_IP`, `CERT_PATH`,
-`KEY_PATH`, `CLIENTS_PATH`, `ACCESS_PATH`, and `AUDIT_LOG`; it refuses
-`SHARE_<name>` (use `share add`) and an empty value. Against the canonical
-configuration it needs root.
+`KEY_PATH`, `CLIENTS_PATH`, `ACCESS_PATH`, `NETWORKS_PATH`, and `AUDIT_LOG`; it
+refuses `SHARE_<name>` (use `share add`) and an empty value. Against the
+canonical configuration it needs root.
+
+### `lanpull network`
+
+Manage named per-network profiles, so one server can move between LANs without
+editing the configuration by hand. Each profile records the server address and
+the certificate and key used on that network; profiles live in
+`NETWORKS_PATH` (default `lanpull.networks.json`, mode 600, never committed).
+
+| Command | Arguments | Options | Purpose |
+| --- | --- | --- | --- |
+| `network add` | `<name>` | `--ip <ip>`, `--cert <path>`, `--key <path>`, `--generate`, `--force` | Register a profile; `--generate` writes its certificate now. |
+| `network list` | — | — | List profiles and mark the active one. |
+| `network show` | `[<name>]` | — | Show one profile (the active one by default). |
+| `network use` | `<name>` | `--dry-run`, `--regenerate-cert`, `--restart` | Apply the profile to the configuration and ensure its certificate. |
+| `network remove` | `<name>` | `--delete-cert`, `--yes` | Drop a profile, optionally deleting its TLS material. |
+
+`network add` defaults the certificate and key to `<STATE_DIR>/net-<name>.crt`
+and `.key`. `network use` sets `SERVER_IP`, `CERT_PATH`, and `KEY_PATH`, and
+generates the certificate only when it is missing; it never regenerates an
+existing certificate (pass `--regenerate-cert` to rotate it, then redistribute
+`server.crt`) and never touches another network's material — so the clients of
+one network keep working while the server runs on another. `--restart` restarts
+the service after applying the profile. Changing the server address still
+requires exporting that network's account folders once
+(`lanpull account export`), and every round still needs `lanpull account arm`.
+
+```bash
+lanpull network add home   --ip <server-ip-home>
+lanpull network add office --ip <server-ip-office> --generate
+sudo lanpull network use office --restart
+lanpull account arm --all --ttl 15m
+```
 
 ### `lanpull service`
 
@@ -392,6 +433,15 @@ Thin wrappers over `systemctl`. `start`/`stop`/`restart` report one line;
 `status` and `logs` pass the `systemctl` output through (an inactive unit is a
 normal result, not an error). The unit does not autostart on boot and has no
 `[Install]` section, so the operator starts it explicitly for a round.
+
+`service logs` forwards to `journalctl`:
+
+| Option | Meaning |
+| --- | --- |
+| `-n`, `--lines <n>` | Show at most the newest `<n>` entries. |
+| `--since <duration\|timestamp>` | Only entries newer than the value, for example `1h`. |
+| `--no-follow` | Print and exit instead of following the log. |
+| `--priority <level>` | Minimum priority, for example `err`. |
 
 ### `lanpull audit`
 
@@ -401,12 +451,15 @@ each share directory) with `present`/`missing`.
 
 ### `lanpull report`
 
-Summarize the audit log: per account, requests/bytes/rejections.
+Summarize the audit log as a table: per account, files, size, and rejections.
 
 | Option | Meaning |
 | --- | --- |
 | `--user <name>` | Restrict to one account (`--account` is a hidden alias). |
 | `--since <duration>` | Only requests newer than the duration, for example `7d` or `1h`. |
+| `--reasons` | Break the rejections down by reason. |
+| `--rejected` | Show only accounts with rejected requests. |
+| `--tail <n>` | Show the newest `<n>` raw records instead of the summary. |
 
 An empty or missing log prints `no requests recorded`.
 
@@ -441,6 +494,10 @@ The client is `<client-folder>/pull.py`. It reads `lanpull.conf`, `auth`, and
 | `--yes` | Skip the `--mirror`/`--clean`/`--self-update` confirmation. |
 | `--quiet` | Suppress the progress bar and the per-share summary. |
 | `--version` | Print the client version. |
+
+During a pull, each file shows a progress line with percentage, transfer rate,
+and ETA; each share ends with a summary; and when more than one share is
+mirrored a final `total:` line combines them.
 
 | Mode | Behavior | Exit code |
 | --- | --- | --- |
@@ -477,13 +534,14 @@ copy of the share.
 | `KEY_PATH` | PEM private key path (mode 600). | `/var/lib/lanpull/server.key` |
 | `CLIENTS_PATH` | Account file. Relative paths resolve against the config file. | `lanpull.clients` |
 | `ACCESS_PATH` | JSON access policy. Relative paths resolve against the config file. | `lanpull.access.json` |
+| `NETWORKS_PATH` | JSON network profiles. Relative paths resolve against the config file. | `lanpull.networks.json` |
 | `AUDIT_LOG` | JSON-lines audit log. | `/var/lib/lanpull/access.log` |
 
 The real file is mode 640 and is never committed. Blank lines and `#` comments
 are ignored, values may be quoted, and `$NAME`/`${NAME}` environment references
 are expanded. At least one `SHARE_<name>` key is required. Nothing lanpull
 generates (`STATE_DIR`, `CERT_PATH`, `KEY_PATH`, `CLIENTS_PATH`, `ACCESS_PATH`,
-`AUDIT_LOG`) may live inside a share root.
+`NETWORKS_PATH`, `AUDIT_LOG`) may live inside a share root.
 
 ### Per-share ignore — `<share-dir>/.lanpullignore`
 

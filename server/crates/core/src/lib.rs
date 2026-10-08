@@ -7,6 +7,7 @@
 //! The submodules are grouped by concern:
 //! - [`config`] — server configuration and path resolution.
 //! - [`policy`] — the JSON access policy and its compiled glob rules.
+//! - [`network`] — named per-network server address and TLS profiles.
 //! - [`glob`] — the share-relative path glob engine.
 //! - [`ignore`] — built-in and per-share `.lanpullignore` patterns.
 //! - [`account`] — accounts, password hashing, and client-folder staging.
@@ -20,8 +21,10 @@ pub mod audit;
 pub mod config;
 pub mod error;
 pub mod glob;
+pub mod human;
 pub mod ignore;
 pub mod live;
+pub mod network;
 pub mod policy;
 pub mod state;
 pub mod throttle;

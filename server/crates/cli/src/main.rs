@@ -19,6 +19,7 @@ mod config_edit;
 mod confirm;
 mod init;
 mod manifest_helpers;
+mod verbosity;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -99,6 +100,7 @@ fn init_tracing(verbose: u8, quiet: bool) -> Result<()> {
 async fn run(cli: Cli) -> Result<()> {
     let json = cli.json;
     let command = cli.command.path();
+    verbosity::set(cli.verbose > 0);
 
     // `init` creates the configuration; every other command needs it. `init`
     // resolves the target the same way as the rest (`--config`, then
@@ -116,7 +118,7 @@ async fn run(cli: Cli) -> Result<()> {
             let config = lanpull_core::config::Config::load(&config_path)?;
             lanpull_http::http::serve(config).await
         }
-        Command::Status => emit(command, cli::misc::status(&config_path)?, json),
+        Command::Status(args) => emit(command, cli::misc::status(&config_path, args)?, json),
         Command::Account { command: sub } => {
             emit(command, cli::account::run(&config_path, sub)?, json)
         }
@@ -127,6 +129,9 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Service { command: sub } => emit(command, cli::service::run(sub)?, json),
         Command::Config { command: sub } => {
             emit(command, cli::config::run(&config_path, sub)?, json)
+        }
+        Command::Network { command: sub } => {
+            emit(command, cli::network::run(&config_path, sub)?, json)
         }
         Command::Cert { force } => emit(command, cert(&config_path, force)?, json),
         Command::Audit => emit(command, cli::misc::audit(&config_path)?, json),

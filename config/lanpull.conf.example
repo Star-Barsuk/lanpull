@@ -44,6 +44,11 @@ CLIENTS_PATH=lanpull.clients
 # committed. Relative paths are resolved against the directory of this config.
 ACCESS_PATH=lanpull.access.json
 
+# Network profiles: JSON mapping a profile name to the server address and TLS
+# material for one LAN. Managed by `lanpull network`; mode 600; never committed.
+# Relative paths are resolved against the directory of this config.
+NETWORKS_PATH=lanpull.networks.json
+
 # Audit log written by `lanpull serve` (one JSON line per request). Read by
 # `lanpull report`.
 AUDIT_LOG=/var/lib/lanpull/access.log

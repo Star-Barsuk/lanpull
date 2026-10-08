@@ -58,6 +58,7 @@ struct ConfigView {
     key_path: String,
     clients_path: String,
     access_path: String,
+    networks_path: String,
     audit_log: String,
 }
 
@@ -95,12 +96,14 @@ fn show(config_path: &Path) -> Result<Outcome> {
         key_path: config.key_path.display().to_string(),
         clients_path: config.clients_path.display().to_string(),
         access_path: config.access_path.display().to_string(),
+        networks_path: config.networks_path.display().to_string(),
         audit_log: config.audit_log.display().to_string(),
     };
     let port = view.port.to_string();
     let mut lines = vec![format!("{:<14}{}", "config:", view.path)];
     for (name, dir) in &view.shares {
-        lines.push(format!("{name}: {dir}"));
+        let key = format!("SHARE_{name}:");
+        lines.push(format!("{key:<14}{dir}"));
     }
     for (key, value) in [
         ("STATE_DIR:", view.state_dir.as_str()),
@@ -111,6 +114,7 @@ fn show(config_path: &Path) -> Result<Outcome> {
         ("KEY_PATH:", view.key_path.as_str()),
         ("CLIENTS_PATH:", view.clients_path.as_str()),
         ("ACCESS_PATH:", view.access_path.as_str()),
+        ("NETWORKS_PATH:", view.networks_path.as_str()),
         ("AUDIT_LOG:", view.audit_log.as_str()),
     ] {
         lines.push(format!("{key:<14}{value}"));
@@ -123,6 +127,12 @@ fn get(config_path: &Path, key: &str) -> Result<Outcome> {
     let config = Config::load(config_path)?;
     let value = if let Some(value) = resolved_value(&config, key) {
         value
+    } else if let Some(name) = key.strip_prefix("SHARE_") {
+        config
+            .shares
+            .get(name)
+            .map(|dir| dir.display().to_string())
+            .ok_or_else(|| Error::Config(format!("unknown share: {name}")))?
     } else {
         crate::config_edit::get(config_path, key)?
             .ok_or_else(|| Error::Config(format!("unknown key: {key}")))?
@@ -157,7 +167,7 @@ fn set(config_path: &Path, key: &str, value: &str, dry_run: bool) -> Result<Outc
 }
 
 /// The keys accepted by `config get`/`config set` and resolved by the loader.
-const fn settable() -> [&'static str; 9] {
+const fn settable() -> [&'static str; 10] {
     [
         "STATE_DIR",
         "BIND",
@@ -167,6 +177,7 @@ const fn settable() -> [&'static str; 9] {
         "KEY_PATH",
         "CLIENTS_PATH",
         "ACCESS_PATH",
+        "NETWORKS_PATH",
         "AUDIT_LOG",
     ]
 }
@@ -182,6 +193,7 @@ fn resolved_value(config: &Config, key: &str) -> Option<String> {
         "KEY_PATH" => Some(config.key_path.display().to_string()),
         "CLIENTS_PATH" => Some(config.clients_path.display().to_string()),
         "ACCESS_PATH" => Some(config.access_path.display().to_string()),
+        "NETWORKS_PATH" => Some(config.networks_path.display().to_string()),
         "AUDIT_LOG" => Some(config.audit_log.display().to_string()),
         _ => None,
     }

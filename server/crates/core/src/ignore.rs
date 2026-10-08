@@ -315,7 +315,8 @@ mod tests {
         clippy::panic,
         clippy::indexing_slicing,
         clippy::arithmetic_side_effects,
-        clippy::missing_assert_message
+        clippy::missing_assert_message,
+        clippy::assert_is_empty
     )]
 
     use super::*;

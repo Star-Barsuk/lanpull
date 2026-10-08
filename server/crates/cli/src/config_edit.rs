@@ -10,10 +10,39 @@ use lanpull_core::error::{Error, Result};
 
 /// Set `key` to `value`, replacing the first existing assignment or appending.
 pub fn set(config_path: &Path, key: &str, value: &str) -> Result<()> {
+    set_many(config_path, &[(key, value)], false)
+}
+
+/// Set several `key`/`value` pairs in one validated write.
+///
+/// All replacements are applied in memory and the prospective file is
+/// validated once, so a change that would leave an invalid configuration is
+/// rejected without touching the file and without a partial edit. With
+/// `dry_run` the validation still runs but nothing is written.
+pub fn set_many(config_path: &Path, changes: &[(&str, &str)], dry_run: bool) -> Result<()> {
     let text = read(config_path)?;
     let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
-    let mut replaced = false;
-    for line in &mut lines {
+    for (key, value) in changes {
+        replace_or_append(&mut lines, key, value);
+    }
+    let mut prospective = lines.join("\n");
+    prospective.push('\n');
+    let base = config_path.parent().unwrap_or_else(|| Path::new("."));
+    lanpull_core::config::Config::parse(&prospective, base)?;
+    if dry_run {
+        return Ok(());
+    }
+    require_canonical_root(config_path)?;
+    lanpull_core::atomic::write(config_path, prospective.as_bytes())?;
+    if is_canonical(config_path) {
+        normalize_canonical(config_path)?;
+    }
+    Ok(())
+}
+
+/// Replace the first assignment of `key`, or append a new one.
+fn replace_or_append(lines: &mut Vec<String>, key: &str, value: &str) {
+    for line in lines.iter_mut() {
         let trimmed = line.trim_start();
         if trimmed.starts_with('#') {
             continue;
@@ -21,15 +50,11 @@ pub fn set(config_path: &Path, key: &str, value: &str) -> Result<()> {
         if let Some((lhs, _)) = trimmed.split_once('=') {
             if lhs.trim() == key {
                 *line = format!("{key}={value}");
-                replaced = true;
-                break;
+                return;
             }
         }
     }
-    if !replaced {
-        lines.push(format!("{key}={value}"));
-    }
-    write(config_path, &lines)
+    lines.push(format!("{key}={value}"));
 }
 
 /// Return the value of `key`, if present.
@@ -59,23 +84,6 @@ fn read(config_path: &Path) -> Result<String> {
             Error::Config(format!("cannot read {}: {e}", config_path.display()))
         }
     })
-}
-
-/// Write the configuration file back, preserving a trailing newline.
-///
-/// The prospective file is validated first, so an edit that would leave an
-/// invalid configuration is rejected without touching the file.
-fn write(config_path: &Path, lines: &[String]) -> Result<()> {
-    require_canonical_root(config_path)?;
-    let mut text = lines.join("\n");
-    text.push('\n');
-    let base = config_path.parent().unwrap_or_else(|| Path::new("."));
-    lanpull_core::config::Config::parse(&text, base)?;
-    lanpull_core::atomic::write(config_path, text.as_bytes())?;
-    if is_canonical(config_path) {
-        normalize_canonical(config_path)?;
-    }
-    Ok(())
 }
 
 /// Whether `config_path` is the canonical `/etc/lanpull/lanpull.conf`.

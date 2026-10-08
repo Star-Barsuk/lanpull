@@ -6,7 +6,6 @@
 //! directory and file are given the operator-readable ownership the service
 //! needs (group taken from `$SUDO_GID`).
 
-use std::io::{BufRead as _, IsTerminal as _, Write as _};
 use std::net::IpAddr;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
@@ -26,8 +25,12 @@ pub fn run(config_path: &Path, args: &InitArgs) -> Result<Outcome> {
 
     // The canonical configuration needs root: it is created root-owned with the
     // operator group. Refuse before touching the filesystem so a normal user
-    // gets an actionable message instead of a raw permission error.
-    if config_dir == Path::new(core_config::DEFAULT_CONFIG_DIR) && effective_uid() != 0 {
+    // gets an actionable message instead of a raw permission error. A dry run
+    // writes nothing and may run as anyone.
+    if !args.dry_run
+        && config_dir == Path::new(core_config::DEFAULT_CONFIG_DIR)
+        && effective_uid() != 0
+    {
         return Err(Error::Usage(format!(
             "{} needs root; run 'sudo lanpull init'",
             config_dir.display()
@@ -56,6 +59,18 @@ pub fn run(config_path: &Path, args: &InitArgs) -> Result<Outcome> {
             "{} already exists; pass --force to overwrite",
             config_path.display()
         )));
+    }
+
+    if args.dry_run {
+        return Ok(describe(
+            config_path,
+            &shares,
+            &state_dir,
+            &bind,
+            port,
+            server_ip,
+            true,
+        ));
     }
 
     std::fs::create_dir_all(config_dir)?;
@@ -89,6 +104,7 @@ pub fn run(config_path: &Path, args: &InitArgs) -> Result<Outcome> {
     );
     text.push_str("CLIENTS_PATH=lanpull.clients\n");
     text.push_str("ACCESS_PATH=lanpull.access.json\n");
+    text.push_str("NETWORKS_PATH=lanpull.networks.json\n");
     let _ = writeln!(text, "AUDIT_LOG={}", state_dir.join("access.log").display());
 
     lanpull_core::atomic::write_private(config_path, text.as_bytes())?;
@@ -96,21 +112,55 @@ pub fn run(config_path: &Path, args: &InitArgs) -> Result<Outcome> {
     // Validate before reporting success.
     core_config::Config::load(config_path)?;
 
+    Ok(describe(
+        config_path,
+        &shares,
+        &state_dir,
+        &bind,
+        port,
+        server_ip,
+        false,
+    ))
+}
+
+/// Build the `init` result, whether it wrote anything or only described it.
+fn describe(
+    config_path: &Path,
+    shares: &[(String, PathBuf)],
+    state_dir: &Path,
+    bind: &str,
+    port: u16,
+    server_ip: IpAddr,
+    dry_run: bool,
+) -> Outcome {
+    let mut outcome = Outcome::new().line(if dry_run {
+        format!("would write {}", config_path.display())
+    } else {
+        format!("wrote {}", config_path.display())
+    });
+    for (name, dir) in shares {
+        outcome = outcome.line(format!("  SHARE_{name}={}", dir.display()));
+    }
+    outcome = outcome
+        .line(format!("  STATE_DIR={}", state_dir.display()))
+        .line(format!("  BIND={bind}"))
+        .line(format!("  PORT={port}"))
+        .line(format!("  SERVER_IP={server_ip}"))
+        .line("next: lanpull cert, then lanpull access and lanpull account add");
     let shares_json: Vec<serde_json::Value> = shares
         .iter()
         .map(|(name, dir)| serde_json::json!({ "name": name, "dir": dir }))
         .collect();
-    let outcome = Outcome::new()
-        .line(format!("wrote {}", config_path.display()))
-        .line(format!("  STATE_DIR={}", state_dir.display()))
-        .line(format!("  SERVER_IP={server_ip}"))
-        .with_data(&serde_json::json!({
-            "path": config_path,
-            "state_dir": state_dir,
-            "server_ip": server_ip.to_string(),
-            "shares": shares_json,
-        }));
-    Ok(outcome)
+    outcome.data = serde_json::json!({
+        "path": config_path,
+        "state_dir": state_dir,
+        "bind": bind,
+        "port": port,
+        "server_ip": server_ip.to_string(),
+        "shares": shares_json,
+        "dry_run": dry_run,
+    });
+    outcome
 }
 
 /// The template written to a share's `.lanpullignore` when it is absent.
@@ -263,24 +313,4 @@ fn detect_server_ip() -> Result<IpAddr> {
     Err(Error::Config(
         "could not detect the LAN address; pass --server-ip".to_string(),
     ))
-}
-
-/// Read a line from the terminal, or return the default when non-interactive.
-#[allow(dead_code)]
-fn prompt(default: &str, label: &str, interactive: bool) -> String {
-    if !interactive || !std::io::stdin().is_terminal() {
-        return default.to_string();
-    }
-    eprint!("{label} [{default}]: ");
-    let _ = std::io::stderr().flush();
-    let mut line = String::new();
-    if std::io::stdin().lock().read_line(&mut line).is_err() {
-        return default.to_string();
-    }
-    let value = line.trim();
-    if value.is_empty() {
-        default.to_string()
-    } else {
-        value.to_string()
-    }
 }

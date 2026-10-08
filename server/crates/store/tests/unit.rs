@@ -8,7 +8,8 @@
     clippy::panic,
     clippy::indexing_slicing,
     clippy::arithmetic_side_effects,
-    clippy::missing_assert_message
+    clippy::missing_assert_message,
+    clippy::assert_is_empty
 )]
 
 use std::collections::BTreeMap;
@@ -53,6 +54,7 @@ fn account_config() -> (config::Config, tempfile::TempDir) {
         key_path: state.join("server.key"),
         clients_path: dir.path().join("lanpull.clients"),
         access_path: dir.path().join("lanpull.access.json"),
+        networks_path: dir.path().join("lanpull.networks.json"),
         audit_log: state.join("access.log"),
     };
     (cfg, dir)

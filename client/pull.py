@@ -32,11 +32,12 @@ import os
 import socket
 import ssl
 import sys
+import time
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote, urlsplit
 
-__version__ = "2.2.0"
+__version__ = "2.3.0"
 
 SCHEME = "whole-file-v1"
 SHARE_PREFIX = "/_lanpull/share/"
@@ -105,20 +106,28 @@ class Options:
     quiet: bool
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass
 class Progress:
     """Progress reporting for one transfer in the current run."""
 
     index: int
     total: int
     quiet: bool = False
+    started: float = dataclasses.field(default_factory=time.monotonic)
 
     def show(self, path: str, done: int, size: int) -> None:
-        """Print the percentage of the current file."""
+        """Print the percentage, transfer rate, and ETA of the current file."""
         if self.quiet:
             return
         percent = 100 if size <= 0 else min(100, done * 100 // size)
-        sys.stdout.write(f"\r[{self.index}/{self.total}] {path} {percent}%")
+        line = f"\r[{self.index}/{self.total}] {path} {percent}%"
+        elapsed = time.monotonic() - self.started
+        if done > 0 and elapsed > 0:
+            rate = done / elapsed
+            line += f" {format_bytes(int(rate))}/s"
+            if size > done:
+                line += f" ETA {format_duration((size - done) / rate)}"
+        sys.stdout.write(line)
         sys.stdout.flush()
 
     def finish(self) -> None:
@@ -470,6 +479,18 @@ def format_bytes(value: int) -> str:
     return f"{size:.1f} TB"
 
 
+def format_duration(seconds: float) -> str:
+    """Format a duration in seconds compactly, for example ``1m05s``."""
+    total = int(seconds)
+    if total < 60:
+        return f"{total}s"
+    minutes, secs = divmod(total, 60)
+    if minutes < 60:
+        return f"{minutes}m{secs:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h{minutes:02d}m"
+
+
 def format_rows(rows: list[list[str]]) -> list[str]:
     """Format rows as an aligned table, padding every column but the last."""
     columns = max((len(row) for row in rows), default=0)
@@ -735,6 +756,10 @@ def run_pull(cdir: Path, client: HttpClient, conf: dict[str, str], options: Opti
     states = load_state(state_path)
 
     exit_code = 0
+    downloaded = 0
+    total_bytes = 0
+    deleted = 0
+    errors = 0
     for share, output in selected.items():
         result = run_share(client, share, output, states.get(share, set()), options)
         states[share] = result.delivered
@@ -744,6 +769,15 @@ def run_pull(cdir: Path, client: HttpClient, conf: dict[str, str], options: Opti
             exit_code = result.code
         if options.check and result.code == 1:
             exit_code = 1
+        downloaded += result.downloaded
+        total_bytes += result.total_bytes
+        deleted += result.deleted
+        errors += result.errors
+    if len(selected) > 1 and not options.quiet and not (options.check or options.dry_run):
+        print(
+            f"total: downloaded {downloaded} files, {format_bytes(total_bytes)}; "
+            f"deleted {deleted}; errors {errors}"
+        )
     return exit_code
 
 
@@ -753,6 +787,11 @@ class _ShareResult:
 
     code: int
     delivered: set[str]
+    downloaded: int = 0
+    total_bytes: int = 0
+    unchanged: int = 0
+    deleted: int = 0
+    errors: int = 0
 
 
 def run_share(
@@ -793,7 +832,7 @@ def run_share(
             updates = len(need) + len(unsure)
             print(f"[{share}] generated_at: {generated_at!s}")
             print(f"[{share}] updates available: {updates}; unchanged: {len(unchanged)}")
-            return _ShareResult(1 if updates else 0, delivered)
+            return _ShareResult(1 if updates else 0, delivered, unchanged=len(unchanged))
 
         if options.dry_run:
             print(f"[{share}] plan (generated_at: {generated_at!s})")
@@ -803,7 +842,7 @@ def run_share(
                 f"[{share}] planned: {len(need)} need, {len(unsure)} verify, "
                 f"{len(stale)} stale, {len(extras)} extra"
             )
-            return _ShareResult(0, delivered)
+            return _ShareResult(0, delivered, unchanged=len(unchanged))
 
         if need:
             check_space(output, sum(item.entry.size for item in need))
@@ -844,7 +883,15 @@ def run_share(
             print(f"[{share}] errors:     {len(errors)} files")
         for path in errors:
             print(f"  {path}", file=sys.stderr)
-        return _ShareResult(1 if errors else 0, delivered)
+        return _ShareResult(
+            1 if errors else 0,
+            delivered,
+            downloaded=downloaded,
+            total_bytes=total_bytes,
+            unchanged=len(unchanged),
+            deleted=deleted,
+            errors=len(errors),
+        )
 
 
 def download_bundle_file(client: HttpClient, name: str, part: Path) -> None:
