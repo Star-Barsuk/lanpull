@@ -6,6 +6,7 @@ import dataclasses
 import hashlib
 import http.client
 import os
+import re
 import ssl
 from pathlib import Path
 from typing import cast
@@ -13,6 +14,10 @@ from typing import cast
 import pytest
 
 import pull
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SERVER_IGNORE_RS = REPO_ROOT / "server/crates/core/src/ignore.rs"
+SHARED_IGNORE_CASES = REPO_ROOT / "server/crates/core/tests/fixtures/ignore_cases.tsv"
 
 
 def test_version_matches_version_file() -> None:
@@ -129,9 +134,49 @@ def test_is_ignored_and_protected() -> None:
     assert pull.is_ignored("~lock.a")
     assert pull.is_ignored("dir/a.part")
     assert not pull.is_ignored("a.txt")
+    assert pull.is_ignored(".lanpull.lock")
+    assert pull.is_ignored("sub/.lanpull.partials.json")
     assert pull.is_protected(".lanpull.lock")
     assert pull.is_protected(".lanpull.partials.json")
     assert not pull.is_protected("a.txt")
+
+
+def _server_default_patterns() -> tuple[str, ...]:
+    text = SERVER_IGNORE_RS.read_text(encoding="utf-8")
+    start = text.index("pub const DEFAULT_IGNORE_PATTERNS")
+    body = text[text.index("= &[", start) + 4 : text.index("];", start)]
+    return tuple(re.findall(r'^\s*"([^"]+)",', body, re.MULTILINE))
+
+
+def test_default_patterns_match_the_server() -> None:
+    if not SERVER_IGNORE_RS.is_file():
+        pytest.skip("server sources are not checked out")
+    assert _server_default_patterns() == pull.DEFAULT_IGNORE_PATTERNS
+
+
+def test_shared_ignore_cases_match_the_server() -> None:
+    if not SHARED_IGNORE_CASES.is_file():
+        pytest.skip("server sources are not checked out")
+    checked = 0
+    for line in SHARED_IGNORE_CASES.read_text(encoding="utf-8").splitlines():
+        if not line or line.startswith("#"):
+            continue
+        path, expected = line.split("\t")
+        assert pull.is_ignored(path) == (expected == "ignored"), path
+        checked += 1
+    assert checked > 40
+
+
+def test_scan_extras_keeps_server_ignored_paths(tmp_path: Path) -> None:
+    mirror = tmp_path / "mirror"
+    (mirror / "build").mkdir(parents=True)
+    (mirror / "build" / "out.txt").write_text("x", encoding="utf-8")
+    (mirror / "tools" / ".venv" / "bin").mkdir(parents=True)
+    (mirror / "tools" / ".venv" / "bin" / "python3").symlink_to("python")
+    (mirror / ".git").mkdir()
+    (mirror / ".git" / "HEAD").write_text("ref", encoding="utf-8")
+    (mirror / "junk.txt").write_text("x", encoding="utf-8")
+    assert pull.scan_extras(mirror, set()) == ["junk.txt"]
 
 
 def test_format_bytes() -> None:
@@ -650,6 +695,17 @@ def test_scan_extras_finds_files_and_symlinks(tmp_path: Path) -> None:
     assert pull.scan_extras(mirror, {"keep.txt"}) == ["link", "sub/extra.txt"]
 
 
+def test_operator_ignore_file_is_never_an_extra(tmp_path: Path) -> None:
+    mirror = tmp_path / "mirror"
+    (mirror / "sub").mkdir(parents=True)
+    (mirror / ".lanpullignore").write_text("!dist/\n", encoding="utf-8")
+    (mirror / "sub" / ".lanpullignore").write_text("*.iso\n", encoding="utf-8")
+    assert pull.is_protected(".lanpullignore")
+    assert pull.is_protected("sub/.lanpullignore")
+    assert not pull.is_ignored(".lanpullignore")
+    assert pull.scan_extras(mirror, set()) == []
+
+
 def test_remove_empty_dirs(tmp_path: Path) -> None:
     root = tmp_path / "root"
     (root / "a" / "b").mkdir(parents=True)
@@ -667,6 +723,7 @@ def test_mirror_deletes_extras_and_empty_dirs(tmp_path: Path) -> None:
     os.utime(mirror / "keep.txt", (1, 1))
     (mirror / "operator.txt").write_text("mine", encoding="utf-8")
     (mirror / "junk" / "x.txt").write_text("x", encoding="utf-8")
+    (mirror / ".lanpullignore").write_text("!dist/\n", encoding="utf-8")
     pull.save_state(tmp_path / "state.json", {"reports": {"operator.txt"}})
     client = cast(
         "pull.HttpClient", _ManifestClient({"reports": _manifest([("keep.txt", b"data")])})
@@ -677,6 +734,7 @@ def test_mirror_deletes_extras_and_empty_dirs(tmp_path: Path) -> None:
     assert not (mirror / "operator.txt").exists()
     assert not (mirror / "junk").exists()
     assert (mirror / ".lanpull.lock").exists()
+    assert (mirror / ".lanpullignore").read_text(encoding="utf-8") == "!dist/\n"
     assert pull.load_state(tmp_path / "state.json") == {"reports": {"keep.txt"}}
 
 

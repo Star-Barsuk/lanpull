@@ -14,7 +14,11 @@
 SHELL := /bin/sh
 
 # --- Toolchain (self-locating) -------------------------------------------
-CARGO_HOME  ?= $(HOME)/.cargo
+# Under sudo, HOME may be root's, so resolve the invoking user's home (the
+# Makefile already reads SUDO_USER for OPERATOR). This keeps `sudo make install`
+# and a plain `make install` equally functional.
+LANPULL_HOME ?= $(if $(SUDO_USER),$(shell getent passwd $(SUDO_USER) | cut -d: -f6),$(HOME))
+CARGO_HOME  ?= $(LANPULL_HOME)/.cargo
 CARGO_BIN   := $(CARGO_HOME)/bin
 export PATH := $(CARGO_BIN):$(PATH)
 CARGO       ?= $(if $(wildcard $(CARGO_BIN)/cargo),$(CARGO_BIN)/cargo,cargo)

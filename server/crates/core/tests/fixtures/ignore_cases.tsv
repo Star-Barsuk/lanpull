@@ -1,0 +1,76 @@
+# Shared ignore cases: <path><TAB>ignored|kept, for a share with no .lanpullignore.
+# Read by server/crates/core/tests/ignore_parity.rs and client/tests/test_pull.py,
+# so the server and the client are checked against the same expectations.
+# Paths use `/` separators and are share-relative.
+
+# Mandatory built-ins.
+~lock.doc#	ignored
+.~lock.doc#	ignored
+a.tmp	ignored
+dir/a.part	ignored
+.lanpull.lock	ignored
+sub/.lanpull.lock	ignored
+.lanpull.partials.json	ignored
+a/b/.lanpull.partials.json	ignored
+.tmp	kept
+.part	kept
+a.tmpx	kept
+lanpull.lock	kept
+.lanpull.lock.txt	kept
+.lanpull.lock.bak	ignored
+
+# Version control.
+.git/HEAD	ignored
+a/.git/config	ignored
+.git	kept
+.svn/entries	ignored
+
+# Rust, Python, JavaScript, JVM, C/C++, Go/Ruby.
+server/target/debug/lanpull	ignored
+src/main.rs.bk	ignored
+x.Rs.bk	kept
+app.pdb	ignored
+__pycache__/m.cpython-311.pyc	ignored
+mod.pyc	ignored
+.venv/bin/python	ignored
+tools/.venv/bin/python3	ignored
+venv/lib/x	ignored
+pkg.egg-info/PKG-INFO	ignored
+.coverage	ignored
+.coverage.host1	ignored
+node_modules/pkg/index.js	ignored
+x.class	ignored
+mylib.so.1	ignored
+cmake-build-debug/x	ignored
+src/CMakeCache.txt	ignored
+vendor/readme.md	ignored
+vendor/bundle/gem.rb	ignored
+vendor-notes/readme.md	kept
+
+# Generic build output, logs, and backups.
+build/out.txt	ignored
+project/build/out.txt	ignored
+build	kept
+docs/build	kept
+dist/a.pdf	ignored
+sub/dist/a.pdf	ignored
+dist	kept
+x.log	ignored
+a/b/x.log	ignored
+a.log.txt	kept
+a.bak	ignored
+
+# Editor and OS artifacts.
+a/.DS_Store	ignored
+~$deck.docx	ignored
+#autosave#	ignored
+a.swp	ignored
+.#lock	ignored
+x.lock	kept
+
+# Ordinary content.
+a.txt	kept
+dir/b.pdf	kept
+tmp	kept
+part	kept
+.hidden	kept

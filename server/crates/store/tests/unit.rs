@@ -297,6 +297,8 @@ fn manifest_skips_ignored_reserved_and_symlinks() {
     fs::create_dir_all(share.join("sub")).unwrap();
     fs::write(share.join("sub/b.bin"), b"data").unwrap();
     fs::write(share.join("skip.tmp"), b"x").unwrap();
+    fs::write(share.join(".lanpull.lock"), b"").unwrap();
+    fs::write(share.join("sub/.lanpull.partials.json"), b"{}").unwrap();
     fs::create_dir_all(share.join("_lanpull")).unwrap();
     fs::write(share.join("_lanpull/secret"), b"x").unwrap();
     std::os::unix::fs::symlink(share.join("a.txt"), share.join("link")).unwrap();

@@ -51,7 +51,8 @@ trusted local network.
   per-client additions/removals; default deny.
 - **Sensible ignores** — a built-in set skips VCS, build, cache, and editor
   artifacts (`target/`, `__pycache__/`, `.venv/`, `node_modules/`, `.git/`, …),
-  with an optional per-share `.lanpullignore` for overrides.
+  with an optional per-share `.lanpullignore` for overrides. Client runtime files
+  (`.lanpull.lock`, `.lanpull.partials.json`) are never distributed.
 - **Self-updating client** — `pull.py` refreshes itself from the server, so
   clients need no `git` and no internet access.
 - **Auditable** — every request, including rejections, is logged and summarized

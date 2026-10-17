@@ -25,10 +25,12 @@ import base64
 import contextlib
 import dataclasses
 import fcntl
+import functools
 import hashlib
 import http.client
 import json
 import os
+import re
 import socket
 import ssl
 import sys
@@ -37,7 +39,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote, urlsplit
 
-__version__ = "2.3.0"
+__version__ = "2.3.1"
 
 SCHEME = "whole-file-v1"
 SHARE_PREFIX = "/_lanpull/share/"
@@ -53,6 +55,7 @@ STATE_NAME = "state.json"
 LOCK_NAME = ".lanpull.lock"
 PARTIALS_NAME = ".lanpull.partials.json"
 INTERNAL = frozenset({LOCK_NAME, PARTIALS_NAME})
+IGNORE_NAME = ".lanpullignore"
 
 RESERVED = "_lanpull"
 CHUNK = 64 * 1024
@@ -249,23 +252,173 @@ def parse_manifest(data: dict[str, Any]) -> tuple[str, list[Entry]]:
     return scheme, entries
 
 
+# Mirror of DEFAULT_IGNORE_PATTERNS in server/crates/core/src/ignore.rs. The
+# client is a standalone script, so it carries its own copy; the parity test in
+# tests/test_pull.py fails if the two lists drift apart.
+DEFAULT_IGNORE_PATTERNS: tuple[str, ...] = (
+    ".git/",
+    ".svn/",
+    ".hg/",
+    ".bzr/",
+    ".jj/",
+    "CVS/",
+    "target/",
+    "*.rs.bk",
+    "*.pdb",
+    "__pycache__/",
+    "*.pyc",
+    "*.pyo",
+    "*.pyd",
+    ".venv/",
+    "venv/",
+    ".eggs/",
+    "*.egg-info/",
+    ".pytest_cache/",
+    ".mypy_cache/",
+    ".ruff_cache/",
+    ".tox/",
+    ".nox/",
+    ".hypothesis/",
+    ".coverage",
+    ".coverage.*",
+    "htmlcov/",
+    "node_modules/",
+    ".npm/",
+    ".pnpm-store/",
+    ".yarn/",
+    ".next/",
+    ".nuxt/",
+    ".turbo/",
+    ".cache/",
+    "coverage/",
+    "*.class",
+    ".gradle/",
+    "*.o",
+    "*.obj",
+    "*.a",
+    "*.so",
+    "*.so.*",
+    "*.dylib",
+    "*.dll",
+    "*.exe",
+    "*.out",
+    "CMakeFiles/",
+    "CMakeCache.txt",
+    "cmake-build-*/",
+    "vendor/",
+    ".bundle/",
+    "vendor/bundle/",
+    "*.gem",
+    "*.swp",
+    "*.swo",
+    "*.swn",
+    "*~",
+    ".#*",
+    "#*#",
+    ".DS_Store",
+    "Thumbs.db",
+    "desktop.ini",
+    "~$*",
+    "build/",
+    "dist/",
+    "*.log",
+    "*.bak",
+    "*.orig",
+    "*.rej",
+)
+
+
+@dataclasses.dataclass(frozen=True)
+class _IgnoreRule:
+    """One compiled default ignore pattern (never negated: defaults have no `!`)."""
+
+    anchored: bool
+    directory: bool
+    segments: tuple[str, ...]
+
+
+def _compile_default(pattern: str) -> _IgnoreRule:
+    directory = pattern.endswith("/")
+    body = pattern[:-1] if directory else pattern
+    return _IgnoreRule(anchored="/" in body, directory=directory, segments=tuple(body.split("/")))
+
+
+@functools.lru_cache(maxsize=4096)
+def _wildcard(pattern: str, text: str) -> bool:
+    """Match one path segment; ``*`` matches any run of characters within it."""
+    if "*" not in pattern:
+        return pattern == text
+    regex = ".*".join(re.escape(part) for part in pattern.split("*"))
+    return re.fullmatch(regex, text, re.DOTALL) is not None
+
+
+def _match_segments(pattern: tuple[str, ...], path: list[str]) -> bool:
+    """Match a whole glob against path segments; ``**`` spans zero or more."""
+    if not pattern:
+        return not path
+    head, rest = pattern[0], pattern[1:]
+    if head == "**":
+        return any(_match_segments(rest, path[skip:]) for skip in range(len(path) + 1))
+    if not path:
+        return False
+    return _wildcard(head, path[0]) and _match_segments(rest, path[1:])
+
+
+def _rule_matches(rule: _IgnoreRule, segments: list[str]) -> bool:
+    count = len(segments)
+    if rule.anchored:
+        last = count - 1 if rule.directory else count
+        return any(_match_segments(rule.segments, segments[:end]) for end in range(1, last + 1))
+    candidates = segments[:-1] if rule.directory else segments
+    return any(_match_segments(rule.segments, [name]) for name in candidates)
+
+
+_DEFAULT_RULES: tuple[_IgnoreRule, ...] = tuple(
+    _compile_default(pattern) for pattern in DEFAULT_IGNORE_PATTERNS
+)
+
+
+def _default_ignored(rel: str) -> bool:
+    segments = rel.split("/")
+    return any(_rule_matches(rule, segments) for rule in _DEFAULT_RULES)
+
+
+def _has_mandatory_extension(name: str) -> bool:
+    """Match Rust's ``Path::extension`` for ``tmp`` and ``part`` (a leading dot is not one)."""
+    dot = name.rfind(".")
+    return dot > 0 and name[dot + 1 :] in ("tmp", "part")
+
+
 def is_ignored(rel: str) -> bool:
-    """Return whether a path matches the built-in ignore patterns."""
+    """Return whether the server ignores a path by default or as a mandatory built-in.
+
+    Operator ``!`` re-includes in a share's ``.lanpullignore`` are not known to the
+    client, so a path re-included by the operator is still reported here. That is
+    safe: the server distributes it, so it is a manifest entry and never an extra.
+    """
     name = rel.rsplit("/", 1)[-1]
     return (
-        name.startswith("~lock.") or name.startswith(".~lock.") or name.endswith((".tmp", ".part"))
+        name.startswith("~lock.")
+        or name.startswith(".~lock.")
+        or _has_mandatory_extension(name)
+        or name in INTERNAL
+        or _default_ignored(rel)
     )
 
 
 def is_protected(rel: str) -> bool:
     """Return whether a path is internal state or an ignored pattern."""
-    return rel in INTERNAL or rel.rsplit("/", 1)[-1] in INTERNAL or is_ignored(rel)
+    return is_internal(rel) or is_ignored(rel)
 
 
 def is_internal(rel: str) -> bool:
-    """Return whether a path is the client's own runtime state or staging."""
+    """Return whether a path is local-only state the client must never delete.
+
+    That is the client's runtime state, its staging files, and the operator's
+    ``.lanpullignore``, which the server never distributes.
+    """
     name = rel.rsplit("/", 1)[-1]
-    return name in INTERNAL or name.endswith(".part")
+    return name in INTERNAL or name == IGNORE_NAME or name.endswith(".part")
 
 
 def sha256_file(path: Path) -> str:
@@ -700,21 +853,22 @@ def scan_extras(output: Path, manifest_paths: set[str]) -> list[str]:
     """Return every mirror entry absent from the manifest, symlinks included.
 
     Regular files, symlinks to files, and symlinks to directories are all
-    candidates; real directories are left to ``remove_empty_dirs``. The
-    client's own runtime files are never candidates.
+    candidates; real directories are left to ``remove_empty_dirs``. Protected
+    paths (the client's runtime files, the operator's ``.lanpullignore``, and the
+    paths the server ignores by default) are never candidates.
     """
     extras: list[str] = []
     for dirpath, dirnames, filenames in os.walk(output, followlinks=False):
         base = Path(dirpath)
         for name in filenames:
             rel = (base / name).relative_to(output).as_posix()
-            if rel not in manifest_paths and not is_internal(rel):
+            if rel not in manifest_paths and not is_protected(rel):
                 extras.append(rel)
         for name in dirnames:
             candidate = base / name
             if candidate.is_symlink():
                 rel = candidate.relative_to(output).as_posix()
-                if rel not in manifest_paths and not is_internal(rel):
+                if rel not in manifest_paths and not is_protected(rel):
                     extras.append(rel)
     return sorted(extras)
 

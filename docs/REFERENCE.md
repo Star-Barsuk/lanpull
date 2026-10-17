@@ -302,7 +302,7 @@ The client is `<client-folder>/pull.py`. It reads `lanpull.conf`, `auth`, and
 
 - `[<share>]` — mirror only this configured share (default: every share).
 - `--check` — compare sizes and mtimes; download nothing; prints `generated_at` and the update/unchanged counts.
-- `--mirror` — exact mirror: after the pull, delete everything in the destination that is not in the manifest (files you created included) and remove the directories left empty; prompts once, `--yes` skips the prompt; a mirror that resolves to `/` is refused.
+- `--mirror` — exact mirror: after the pull, delete everything in the destination that is not in the manifest (files you created included) and remove the directories left empty; the client's runtime files, the operator's `.lanpullignore`, and the paths the server ignores by default (`build/`, `.git/`, `.venv/`, `dist/`, …) are never deleted; prompts once, `--yes` skips the prompt; a mirror that resolves to `/` is refused.
 - `--dry-run` — print the plan as a table; change nothing.
 - `--delete` — delete tracked stale files without prompting (normal pull only).
 - `--all` — list every file in a plan or deletion list (default: the first 50 rows).
@@ -390,14 +390,18 @@ Character classes (`[abc]`), `?`, and other escapes are not supported. An
 invalid pattern is a warning, not a failure, and the `.lanpullignore` file
 itself is never distributed.
 
+Always ignored, and never re-includable with `!`: `~lock.*`, `.~lock.*`, `*.tmp`,
+`*.part`, and the client runtime files `.lanpull.lock` and `.lanpull.partials.json`.
+
 Lanpull already ignores the VCS, build, cache, and editor/OS artifacts of common
 languages — including `.git/`, `target/`, `__pycache__/`, `.venv/`,
 `node_modules/`, `dist/`, `build/`, `vendor/`, `*.o`, `*.so`, `*.class`,
 `*.swp`, `*~`, `.DS_Store`, and `~$*`. That default set is applied to every
 share and can be overridden per path with `!`, for example `!build/keep.txt`.
-A file that was already delivered and is then ignored becomes stale on the next
-rescan, so the next pull removes it from the mirror like any server-side
-deletion.
+A file that was already delivered and is then ignored by an operator rule becomes
+stale on the next rescan, so the next pull removes it from the mirror like any
+server-side deletion. A file ignored by the built-in or default set is never
+treated as stale and is never removed by a pull, so the client keeps it.
 
 ### Accounts — `/etc/lanpull/lanpull.clients`
 

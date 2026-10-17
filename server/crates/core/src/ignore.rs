@@ -3,7 +3,8 @@
 //!
 //! There are three tiers, evaluated in this order:
 //!
-//! 1. **Mandatory built-ins** (`~lock.*`, `.~lock.*`, `*.tmp`, `*.part`) — see
+//! 1. **Mandatory built-ins** (`~lock.*`, `.~lock.*`, `*.tmp`, `*.part`, and the
+//!    client runtime names `.lanpull.lock`, `.lanpull.partials.json`) — see
 //!    [`is_builtin_ignored`]. They are always ignored and can never be
 //!    re-included.
 //! 2. **Default set** — [`DEFAULT_IGNORE_PATTERNS`], the common VCS, build,
@@ -116,13 +117,21 @@ pub const DEFAULT_IGNORE_PATTERNS: &[&str] = &[
     "*.rej",
 ];
 
+/// Client runtime files that are written into a mirror and must never be
+/// distributed. The client treats the same names as its own state.
+pub const CLIENT_RUNTIME_NAMES: &[&str] = &[".lanpull.lock", ".lanpull.partials.json"];
+
 /// Return `true` when a share-relative path matches a mandatory built-in.
 ///
-/// Patterns: `~lock.*`, `.~lock.*`, `*.tmp`, `*.part`. These can never be
-/// re-included by `.lanpullignore`.
+/// Patterns: `~lock.*`, `.~lock.*`, `*.tmp`, `*.part`, and the client runtime
+/// names in [`CLIENT_RUNTIME_NAMES`]. These can never be re-included by
+/// `.lanpullignore`.
 pub fn is_builtin_ignored(rel: &str) -> bool {
     let name = rel.rsplit('/').next().unwrap_or(rel);
     if name.starts_with("~lock.") || name.starts_with(".~lock.") {
+        return true;
+    }
+    if CLIENT_RUNTIME_NAMES.contains(&name) {
         return true;
     }
     matches!(
@@ -346,12 +355,36 @@ mod tests {
 
     #[test]
     fn mandatory_patterns_are_ignored() {
-        for ignored in ["~lock.a", ".~lock.b", "a.tmp", "dir/a.part"] {
+        for ignored in [
+            "~lock.a",
+            ".~lock.b",
+            "a.tmp",
+            "dir/a.part",
+            ".lanpull.lock",
+            "sub/.lanpull.lock",
+            ".lanpull.partials.json",
+            "a/b/.lanpull.partials.json",
+        ] {
             assert!(is_builtin_ignored(ignored), "{ignored} should be ignored");
         }
-        for kept in ["a.txt", "dir/b.pdf", "tmp", "part", "a.tmpx"] {
+        for kept in [
+            "a.txt",
+            "dir/b.pdf",
+            "tmp",
+            "part",
+            "a.tmpx",
+            "lanpull.lock",
+            ".lanpull.lock.bak",
+        ] {
             assert!(!is_builtin_ignored(kept), "{kept} should be kept");
         }
+    }
+
+    #[test]
+    fn client_runtime_names_cannot_be_reincluded() {
+        let r = rules(&["!.lanpull.lock", "!sub/.lanpull.partials.json"]);
+        assert!(r.is_ignored(".lanpull.lock"));
+        assert!(r.is_ignored("sub/.lanpull.partials.json"));
     }
 
     #[test]
