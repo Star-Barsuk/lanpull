@@ -293,7 +293,8 @@ make hooks           # install the optional pre-push net
 ```
 
 `make setup` installs the Rust target and the pinned gate tools; the client gates
-create their uv-managed `.venv` on first run (`make -C client setup`). The
+create their uv-managed `.venv` on the minimum supported Python (3.11) on first
+run (`make -C client setup`), from the hash-locked `requirements-dev.txt`. The
 toolchain (`server/rust-toolchain.toml`) and the gate tools are pinned to
 known-good versions; bump them deliberately, never inline. There is intentionally
 **no hosted CI**: the gate is `make ci-full`, run deliberately before a push, and

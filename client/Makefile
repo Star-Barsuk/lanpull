@@ -1,12 +1,15 @@
 # lanpull client Makefile.
 # Static analysis, tests, and dependency audit for the Python client.
 #
-# The gates bootstrap their own uv-managed virtual environment: the stamp file
-# is a prerequisite of every gate, so `make ci` works from a clean tree.
+# The gates bootstrap their own uv-managed virtual environment on the minimum
+# supported Python (3.11), so a gate failure reflects the target runtime rather
+# than the developer's interpreter. The stamp is a prerequisite of every gate,
+# so `make ci` works from a clean tree.
 
 SHELL := /bin/sh
 
-VENV       ?= .venv
+VENV           ?= .venv
+PYTHON_VERSION ?= 3.11
 BIN        := $(VENV)/bin
 STAMP      := $(VENV)/.stamp
 # Self-locate uv (commonly ~/.local/bin/uv) so the documented gates work
@@ -29,8 +32,8 @@ check-tools: ## Fail early when uv or python3 is missing
 	@command -v python3 >/dev/null 2>&1 || { \
 		echo "lanpull: missing python3" >&2; exit 1; }
 
-$(STAMP): requirements-dev.txt | check-tools
-	@test -d $(VENV) || $(UV) venv $(VENV)
+$(STAMP): requirements-dev.in requirements-dev.txt | check-tools
+	@test -d $(VENV) || $(UV) venv --python $(PYTHON_VERSION) $(VENV)
 	$(UV) pip install --python $(PYTHON) -r requirements-dev.txt
 	@touch $(STAMP)
 
