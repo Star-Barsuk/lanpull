@@ -1,0 +1,10 @@
+# lanpull Clippy configuration.
+# This file only configures the behavior of individual lints.
+# Lint levels live in `[lints.clippy]` in `server/Cargo.toml`.
+
+# Methods that must never be used in the server. Each entry needs a reason;
+# Clippy fails the build when one of them is called (see `make lint`).
+disallowed-methods = [
+    { path = "std::process::Command::new", reason = "lanpull never spawns external processes; shelling out from the server is a command-execution risk" },
+    { path = "std::env::set_var", reason = "process-global mutation is unsound once other threads run; configuration is read from files" },
+]

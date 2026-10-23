@@ -1,0 +1,58 @@
+# lanpull .gitignore
+# Reference ignore set for the project stack: Rust (server) + Python (client).
+
+# --- Local instructions and secrets (never commit) ------------------------
+AGENTS.md
+config/lanpull.conf
+config/lanpull.clients
+config/lanpull.access.json
+
+# --- Internal development documents (not distributed) ---------------------
+# Public exceptions: docs/CONTRIBUTING.md, docs/SECURITY.md, docs/REFERENCE.md.
+docs/*
+!docs/CONTRIBUTING.md
+!docs/SECURITY.md
+!docs/REFERENCE.md
+
+# --- Private operator tooling (not committed) -----------------------------
+tools/
+
+# --- Rust -----------------------------------------------------------------
+target/
+**/*.rs.bk
+*.pdb
+
+# --- Python ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# --- lanpull runtime artifacts (if run inside the repository) -------------
+*.part
+*.tmp
+*.tmp.*
+.lanpull.lock
+state.json
+.lanpull.partials.json
+
+# --- Editors and OS -------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

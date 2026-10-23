@@ -1,0 +1,20 @@
+# Secret scan configuration for `make secrets` and the pre-push hook.
+#
+# The default rule set is kept. Build outputs and caches contain third-party
+# fixtures (for example a PEM test key compiled into an rlib), not project
+# secrets, so those trees are excluded from the scan.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Generated, cached, and vendored trees are not project content"
+paths = [
+  '''(^|/)\.git/''',
+  '''(^|/)target/''',
+  '''(^|/)\.venv/''',
+  '''(^|/)__pycache__/''',
+  '''(^|/)\.pytest_cache/''',
+  '''(^|/)\.mypy_cache/''',
+  '''(^|/)\.ruff_cache/''',
+]

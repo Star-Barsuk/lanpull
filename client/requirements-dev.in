@@ -1,0 +1,16 @@
+# Direct development tools for the lanpull client.
+# The client runtime uses the standard library only; nothing here is shipped.
+# This is the intent file; requirements-dev.txt is generated from it with
+# hashes and the full transitive set:
+#
+#   uv pip compile --generate-hashes --python-version 3.11 \
+#       requirements-dev.in -o requirements-dev.txt
+#
+# Install with `make setup` (uv) or
+# `uv pip install -r requirements-dev.txt`.
+
+ruff==0.16.9
+mypy==2.3.1
+pytest==9.1.1
+pytest-cov==7.1.0
+pip-audit==2.10.1

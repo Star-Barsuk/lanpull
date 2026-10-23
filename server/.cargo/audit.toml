@@ -1,0 +1,7 @@
+# lanpull cargo-audit configuration.
+# Enforced by `make audit` (`cargo audit`).
+# An ignored advisory must carry a reason and a review date, for example:
+#   { id = "RUSTSEC-0000-0000", reason = "not reachable; re-check 2026-12-31" }
+
+[advisories]
+ignore = []

@@ -1,0 +1,198 @@
+# lanpull server Makefile.
+# Thin dispatcher: one target per operation. Non-trivial, privileged, or
+# destructive logic lives in scripts/ and is invoked from one-line recipes.
+#
+# This Makefile only works with the source tree: it builds the binary, installs
+# it, and runs the quality gates. It never generates a configuration. After
+# `make install`, the operator drives the server with the installed `lanpull`
+# binary (see the `lanpull --help` tree); the configuration is created by
+# `sudo lanpull init`.
+#
+# The Makefile locates the Rust toolchain itself ($CARGO_HOME/bin), so the
+# documented commands work without editing PATH first.
+
+SHELL := /bin/sh
+
+# --- Toolchain (self-locating) -------------------------------------------
+# Under sudo, HOME may be root's, so resolve the invoking user's home (the
+# Makefile already reads SUDO_USER for OPERATOR). This keeps `sudo make install`
+# and a plain `make install` equally functional.
+LANPULL_HOME ?= $(if $(SUDO_USER),$(shell getent passwd $(SUDO_USER) | cut -d: -f6),$(HOME))
+CARGO_HOME  ?= $(LANPULL_HOME)/.cargo
+CARGO_BIN   := $(CARGO_HOME)/bin
+export PATH := $(CARGO_BIN):$(PATH)
+CARGO       ?= $(if $(wildcard $(CARGO_BIN)/cargo),$(CARGO_BIN)/cargo,cargo)
+RUSTUP      ?= $(if $(wildcard $(CARGO_BIN)/rustup),$(CARGO_BIN)/rustup,rustup)
+TARGET      ?= x86_64-unknown-linux-musl
+# Note: `clippy`, `test`, and `doc` run against the host toolchain (fast); the
+# supply-chain gates (`deny`, `audit`, `geiger`) analyze the musl build graph,
+# matching what `build` produces. A feature available only on one target could
+# in principle differ, so the release binary stays validated by `e2e`/`audit-bin`.
+# Quality-gate tools installed by `setup`. Versions are pinned so the gates are
+# reproducible; bump a version here deliberately (TOOL_VERSIONS), never inline.
+TOOLS := cargo-audit cargo-deny cargo-geiger cargo-auditable cargo-machete
+TOOL_VERSIONS := cargo-audit@0.22.2 cargo-deny@0.20.2 cargo-geiger@0.13.0 \
+	cargo-auditable@0.7.7 cargo-machete@0.9.2
+BINARY      := target/$(TARGET)/release/lanpull
+
+# --- Install locations ---------------------------------------------------
+BIN_DIR        ?= /usr/local/bin
+LANPULL        ?= $(BIN_DIR)/lanpull
+SERVICE        ?= lanpull.service
+UNIT           ?= /etc/systemd/system/$(SERVICE)
+CONFIG_DIR     ?= /etc/lanpull
+OPERATOR       ?= $(if $(SUDO_USER),$(SUDO_USER),$(shell id -un))
+OPERATOR_GROUP ?= $(shell id -gn $(OPERATOR) 2>/dev/null || id -gn)
+CLIENT_DIR     ?= ../client
+STATE_DIR      ?= /var/lib/lanpull
+STATE_DIR_ABS  := $(abspath $(STATE_DIR))
+
+CONFIRM ?=
+
+SCRIPTS := scripts
+CRATE_DIR := crates
+CRATES    := core store http cli
+
+UNINSTALL_CMD = $(SCRIPTS)/uninstall.sh --binary "$(LANPULL)" --unit "$(UNIT)" \
+	--state-dir "$(STATE_DIR_ABS)" --conf-dir "$(CONFIG_DIR)" \
+	--service "$(SERVICE)"
+
+.PHONY: help setup build install uninstall wipe \
+        clean distclean confirm check-tools check-scripts check-core cli-test e2e client-bundle \
+        fmt fmt-check lint doc test coverage bench fuzz machete deny audit audit-bin geiger security ci
+
+help: ## Show available targets
+	@$(SCRIPTS)/help.sh
+
+setup: ## Install the Rust target and the pinned quality-gate tools
+	$(RUSTUP) target add $(TARGET)
+	@for tool in $(TOOL_VERSIONS); do \
+		echo "lanpull: installing $$tool"; \
+		$(CARGO) install --locked $$tool || exit 1; \
+	done
+
+build: ## Build the static server binary with embedded dependency metadata
+	$(CARGO) auditable build --release --locked --target $(TARGET)
+
+client-bundle: ## Stage client/ into $STATE_DIR/client
+	install -Dm755 $(CLIENT_DIR)/pull.py $(STATE_DIR)/client/pull.py
+	install -Dm644 $(CLIENT_DIR)/VERSION $(STATE_DIR)/client/VERSION
+
+install: build ## Install the binary, unit, config dir, and client bundle
+	$(SCRIPTS)/install.sh \
+		--binary "$(BINARY)" --bin-dir "$(BIN_DIR)" \
+		--unit-src "$(abspath ../systemd/lanpull.service)" --unit-dest "$(UNIT)" \
+		--state-dir "$(STATE_DIR_ABS)" --operator "$(OPERATOR)" \
+		--group "$(OPERATOR_GROUP)" --conf-dir "$(CONFIG_DIR)" \
+		--client-dir "$(CLIENT_DIR)"
+
+uninstall: confirm ## Remove the binary, unit, /etc/lanpull, and state (CONFIRM=1)
+	$(UNINSTALL_CMD)
+
+wipe: confirm ## Remove everything lanpull created (CONFIRM=1)
+	$(MAKE) distclean CONFIRM=1
+	$(UNINSTALL_CMD)
+
+clean: ## Remove build artifacts and caches (no root)
+	$(CARGO) clean
+	$(MAKE) -C $(CLIENT_DIR) clean
+
+confirm: ## Refuse a destructive target unless CONFIRM=1 is given
+	@if [ "$(CONFIRM)" != "1" ]; then \
+		echo "lanpull: this target deletes configuration, credentials, and/or state."; \
+		echo "         re-run with CONFIRM=1 to proceed."; \
+		exit 1; \
+	fi
+
+distclean: confirm ## Remove build artifacts and repository runtime leftovers (CONFIRM=1)
+	$(MAKE) clean
+	$(SCRIPTS)/distclean.sh ..
+
+check-tools: ## Fail early when a gate tool is missing (run make setup)
+	@for tool in $(TOOLS); do \
+		command -v $$tool >/dev/null 2>&1 || { \
+			echo "lanpull: missing $$tool; run 'make setup'" >&2; exit 1; \
+		}; \
+	done
+
+check-core: ## Enforce that lanpull-core stays free of the HTTP stack
+	@deps=$$($(CARGO) tree -p lanpull-core -e normal --prefix none 2>/dev/null); \
+	if printf '%s\n' "$$deps" | grep -Eq '^(axum|axum-server|tower|tower-http|hyper|hyper-util) v'; then \
+		echo "lanpull: lanpull-core must not depend on the HTTP stack" >&2; \
+		printf '%s\n' "$$deps" | grep -E '^(axum|axum-server|tower|tower-http|hyper|hyper-util) v' >&2; \
+		exit 1; \
+	fi
+
+check-scripts: ## Parse the server shell scripts (shellcheck runs when installed)
+	@for script in $(SCRIPTS)/*.sh; do sh -n "$$script" || exit 1; done
+	@if command -v shellcheck >/dev/null 2>&1; then \
+		shellcheck -x -s sh -P $(SCRIPTS) $(SCRIPTS)/*.sh || exit 1; \
+	else \
+		echo "lanpull: shellcheck not installed; linting the scripts by 'sh -n' only" >&2; \
+	fi
+
+e2e: build ## Run the loopback end-to-end smoke test (dev only; needs python3)
+	$(SCRIPTS)/e2e.sh "$(abspath $(BINARY))" "$(abspath $(CLIENT_DIR))"
+
+fmt: ## Format Rust sources
+	$(CARGO) fmt --all
+
+fmt-check: ## Check Rust formatting without changing files
+	$(CARGO) fmt --all --check
+
+lint: ## Run Clippy on all targets with warnings denied
+	$(CARGO) clippy --locked --all-targets --all-features -- -D warnings
+
+doc: ## Build docs and deny warnings (catches broken intra-doc links)
+	RUSTDOCFLAGS="-D warnings" $(CARGO) doc --no-deps --locked
+
+test: ## Run the Rust test suite
+	$(CARGO) test --locked --workspace
+
+bench: ## Run the criterion benchmarks (advisory; not a gate)
+	$(CARGO) bench --workspace
+
+coverage: ## Report test coverage (cargo-llvm-cov; not a gate)
+	@command -v cargo-llvm-cov >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-llvm-cov; install it with 'cargo install cargo-llvm-cov --locked' and 'rustup component add llvm-tools-preview'" >&2; \
+		exit 1; \
+	}
+	$(CARGO) llvm-cov --locked --workspace --summary-only
+
+FUZZ_TARGETS := config glob manifest relpath
+FUZZ_TIME    ?= 20
+
+fuzz: ## Run a short fuzz smoke over the parsers (nightly + cargo-fuzz; not a gate)
+	@command -v cargo-fuzz >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-fuzz; run 'cargo install cargo-fuzz --locked' and 'rustup toolchain install nightly'" >&2; \
+		exit 1; \
+	}
+	@for target in $(FUZZ_TARGETS); do \
+		echo "fuzz: $$target ($(FUZZ_TIME)s)"; \
+		$(CARGO) +nightly fuzz run $$target -- -max_total_time=$(FUZZ_TIME) -rss_limit_mb=2048 || exit 1; \
+	done
+
+machete: ## Check for unused dependencies in every crate
+	$(CARGO) machete
+
+cli-test: build ## Run the operator-style CLI test against the built binary
+	$(SCRIPTS)/cli_test.sh "$(abspath $(BINARY))"
+
+deny: ## Enforce the dependency policy (advisories, licenses, bans, sources)
+	$(CARGO) deny check
+
+audit: ## Scan dependencies for known vulnerabilities
+	$(CARGO) audit
+
+audit-bin: build ## Audit the compiled binary's embedded dependency list
+	$(CARGO) audit bin $(BINARY)
+
+geiger: ## Report unsafe usage across the dependency tree
+	@for member in $(CRATES); do \
+		echo "geiger: $$member"; \
+		(cd $(CRATE_DIR)/$$member && $(CARGO) geiger --forbid-only) || exit 1; \
+	done
+
+security: deny audit audit-bin geiger ## Run every supply-chain security check
+
+ci: check-tools check-scripts check-core fmt-check deny audit machete lint test doc cli-test audit-bin geiger ## Run every Rust quality and security gate

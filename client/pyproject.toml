@@ -1,0 +1,51 @@
+# lanpull Python client tooling.
+# The client itself uses only the standard library; these settings configure the
+# static analysis gates run by the client Makefile and the root `make ci`.
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "A",   # flake8-builtins
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+    "S",   # flake8-bandit (security; replaces the bandit tool)
+    "PTH", # flake8-use-pathlib
+    "RET", # flake8-return
+    "RUF", # Ruff-specific rules
+]
+ignore = [
+    # urllib is used deliberately for the pinned-HTTPS requests.
+    "S310",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests use bare asserts and literal test credentials.
+"tests/**" = ["S101", "S105", "S106"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.mypy]
+python_version = "3.11"
+files = ["."]
+exclude = ['^\.venv/']
+mypy_path = "."
+strict = true
+warn_unreachable = true
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

@@ -1,0 +1,52 @@
+# lanpull fuzz targets.
+#
+# Not part of `make ci`: they need a nightly toolchain and cargo-fuzz. Run a
+# short smoke with `make -C server fuzz`; the test notes describe the targets.
+#
+# The crate is detached from the server workspace so the nightly build and its
+# sanitizer flags never affect the release build.
+
+[package]
+name = "lanpull-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+lanpull-core = { path = "../crates/core" }
+lanpull-store = { path = "../crates/store" }
+
+[[bin]]
+name = "config"
+path = "fuzz_targets/config.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "glob"
+path = "fuzz_targets/glob.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "manifest"
+path = "fuzz_targets/manifest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "relpath"
+path = "fuzz_targets/relpath.rs"
+test = false
+doc = false
+bench = false

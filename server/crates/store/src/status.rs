@@ -1,0 +1,260 @@
+//! Operator status checks and safety nets.
+//!
+//! `lanpull status` and server startup compare the newest share file against
+//! the manifest and report symlinks, reserved-prefix entries, and armed
+//! accounts.
+
+use std::os::unix::fs::MetadataExt;
+use std::path::Path;
+
+use walkdir::WalkDir;
+
+use serde::Serialize;
+
+use lanpull_core::arm::ArmState;
+use lanpull_core::clients::Clients;
+use lanpull_core::config::Config;
+use lanpull_core::error::{Error, Result};
+use lanpull_core::policy::Policy;
+use lanpull_core::relpath;
+use lanpull_core::timeutil;
+
+use crate::manifest::Manifest;
+
+/// Neutral starting point for the newest-mtime scan (any real mtime is above it).
+const MIN_MTIME: i64 = i64::MIN;
+
+/// Warnings suitable for server startup.
+pub fn startup_warnings(config: &Config) -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    for (share, dir) in &config.shares {
+        match Manifest::load(&config.manifest_path(share)) {
+            Ok(manifest) => {
+                warnings.extend(
+                    freshness_warnings(dir, &manifest)
+                        .into_iter()
+                        .map(|warning| format!("{share}: {warning}")),
+                );
+            }
+            Err(_) => warnings.push(format!(
+                "{share}: no manifest yet; run 'lanpull share rescan' before the first pull"
+            )),
+        }
+        match walk_warnings(dir) {
+            Ok(more) => warnings.extend(
+                more.into_iter()
+                    .map(|warning| format!("{share}: {warning}")),
+            ),
+            Err(e) => warnings.push(format!("{share}: cannot inspect share directory: {e}")),
+        }
+    }
+
+    warnings.extend(access_warnings(config));
+    warnings
+}
+
+/// An armed account and its remaining window.
+#[derive(Debug, Clone, Serialize)]
+pub struct ArmedAccount {
+    /// Account name.
+    pub account: String,
+    /// Seconds left in the arm window.
+    pub remaining_secs: i64,
+}
+
+/// Structured operator status: manifest summaries, warnings, and arm state.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct StatusReport {
+    /// One line per present share manifest.
+    pub manifests: Vec<String>,
+    /// Actionable warnings (stale manifests, symlinks, policy problems).
+    pub warnings: Vec<String>,
+    /// Armed accounts that still exist.
+    pub armed: Vec<ArmedAccount>,
+}
+
+/// Full status output for the operator.
+///
+/// Manifest summaries and the arm state go to stdout; the actionable warnings
+/// are returned separately so the caller can route them to stderr and to the
+/// JSON envelope's `warnings` field.
+pub fn report(config: &Config) -> Result<StatusReport> {
+    let mut manifests = Vec::new();
+    let mut warnings = Vec::new();
+
+    for (share, dir) in &config.shares {
+        match Manifest::load(&config.manifest_path(share)) {
+            Ok(manifest) => {
+                manifests.push(format!(
+                    "manifest {share}: {} files, generated_at {}",
+                    manifest.files.len(),
+                    manifest.generated_at
+                ));
+                warnings.extend(
+                    freshness_warnings(dir, &manifest)
+                        .into_iter()
+                        .map(|warning| format!("{share}: {warning}")),
+                );
+            }
+            Err(_) => warnings.push(format!(
+                "{share}: manifest MISSING (run 'lanpull share rescan')"
+            )),
+        }
+        warnings.extend(
+            walk_warnings(dir)?
+                .into_iter()
+                .map(|warning| format!("{share}: {warning}")),
+        );
+    }
+
+    warnings.extend(access_warnings(config));
+
+    let now = timeutil::now_unix();
+    let arm = ArmState::load(&config.arm_path())?;
+    // Arm entries outlive a removed account; only list accounts that still exist.
+    let known = Clients::load(&config.clients_path).ok();
+    let armed = arm
+        .armed_entries(now)
+        .into_iter()
+        .filter(|(name, _)| {
+            known
+                .as_ref()
+                .is_none_or(|clients| clients.get(name).is_some())
+        })
+        .map(|(account, remaining_secs)| ArmedAccount {
+            account,
+            remaining_secs,
+        })
+        .collect();
+
+    Ok(StatusReport {
+        manifests,
+        warnings,
+        armed,
+    })
+}
+
+/// Warn when files in the share are newer than the manifest.
+pub fn freshness_warnings(share: &Path, manifest: &Manifest) -> Vec<String> {
+    let mut warnings = Vec::new();
+    match newest_mtime(share) {
+        Ok(Some(newest)) => {
+            if let Ok(generated) = timeutil::parse_iso8601(&manifest.generated_at) {
+                if newest > generated {
+                    warnings.push(
+                        "share has files newer than the manifest; run 'lanpull share rescan'"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+        Ok(None) => {}
+        Err(e) => warnings.push(format!("cannot inspect share directory: {e}")),
+    }
+    warnings
+}
+
+/// Warn about accounts without rules and policy entries naming unknown shares.
+pub fn access_warnings(config: &Config) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let policy = match Policy::load(&config.access_path) {
+        Ok(policy) => policy,
+        Err(e) => {
+            warnings.push(format!("cannot read access policy: {e}"));
+            return warnings;
+        }
+    };
+
+    for share in policy.shares.keys() {
+        if !config.shares.contains_key(share) {
+            warnings.push(format!("access: policy references unknown share {share}"));
+        }
+    }
+
+    match Clients::load(&config.clients_path) {
+        Ok(clients) => {
+            let access = match policy.expand(&clients) {
+                Ok(access) => access,
+                Err(e) => {
+                    warnings.push(format!("cannot expand access policy: {e}"));
+                    return warnings;
+                }
+            };
+            if !clients.is_empty() && access.is_empty() {
+                warnings.push("no access rules; every account can pull nothing".to_string());
+            }
+            for account in clients.iter() {
+                if !access.has_rules(&account.name) {
+                    warnings.push(format!("account {} has no access rules", account.name));
+                }
+            }
+        }
+        Err(e) => warnings.push(format!("cannot read accounts: {e}")),
+    }
+
+    warnings
+}
+
+/// Report symlinks, reserved-prefix entries, and `.lanpullignore` problems.
+pub fn walk_warnings(share: &Path) -> Result<Vec<String>> {
+    let mut warnings = Vec::new();
+    let (_, ignore_warnings) = lanpull_core::ignore::IgnoreRules::load(share);
+    warnings.extend(ignore_warnings);
+    for entry in WalkDir::new(share).follow_links(false) {
+        let entry = entry.map_err(|e| Error::Io(std::io::Error::other(e.to_string())))?;
+        if entry.file_type().is_dir() {
+            continue;
+        }
+        let Ok(rel) = relpath::to_relative_string(share, entry.path()) else {
+            continue;
+        };
+        if entry.file_type().is_symlink() {
+            warnings.push(format!("symlink skipped: {rel}"));
+        } else if relpath::is_reserved(&rel) {
+            warnings.push(format!("reserved-prefix entry ignored: {rel}"));
+        }
+    }
+    Ok(warnings)
+}
+
+/// Newest file modification time under `share`, if any.
+pub fn newest_mtime(share: &Path) -> Result<Option<i64>> {
+    let mut newest = MIN_MTIME;
+    let mut found = false;
+    for entry in WalkDir::new(share).follow_links(false) {
+        let entry = entry.map_err(|e| Error::Io(std::io::Error::other(e.to_string())))?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let mtime = entry
+            .metadata()
+            .map_err(|e| Error::Io(std::io::Error::other(e.to_string())))?
+            .mtime();
+        if mtime > newest {
+            newest = mtime;
+        }
+        found = true;
+    }
+    Ok(if found { Some(newest) } else { None })
+}
+
+/// Seconds in a minute.
+const SECS_PER_MINUTE: i64 = 60;
+/// Seconds in an hour.
+const SECS_PER_HOUR: i64 = 3600;
+
+/// Format a remaining duration compactly.
+pub fn format_duration(seconds: i64) -> String {
+    if seconds < SECS_PER_MINUTE {
+        format!("{seconds}s")
+    } else if seconds < SECS_PER_HOUR {
+        format!("{}m", seconds / SECS_PER_MINUTE)
+    } else {
+        format!(
+            "{}h{}m",
+            seconds / SECS_PER_HOUR,
+            (seconds % SECS_PER_HOUR) / SECS_PER_MINUTE
+        )
+    }
+}
