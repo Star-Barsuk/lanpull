@@ -183,7 +183,7 @@ async fn missing_credentials_are_rejected() {
 }
 
 #[tokio::test]
-async fn wrong_password_reports_bad_password() {
+async fn wrong_password_reports_a_generic_failure() {
     let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
     arm(&state, &["alpha"]);
     let response = call(
@@ -194,8 +194,35 @@ async fn wrong_password_reports_bad_password() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(
         response.headers().get(REASON_HEADER).unwrap(),
-        "bad_password"
+        "auth_failed"
     );
+}
+
+/// An unknown account and a wrong password must be indistinguishable: same
+/// status, same reason header, same body. Distinguishing them would let an
+/// unauthenticated caller enumerate accounts and would defeat the equal-cost
+/// dummy-hash check.
+#[tokio::test]
+async fn unknown_user_and_wrong_password_are_indistinguishable() {
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
+    let unknown = call(
+        &state,
+        request("GET", manifest_uri(), Some("ghost:secret"), [127, 0, 0, 1]),
+    )
+    .await;
+    let wrong = call(
+        &state,
+        request("GET", manifest_uri(), Some("alpha:wrong"), [127, 0, 0, 1]),
+    )
+    .await;
+
+    assert_eq!(unknown.status(), wrong.status());
+    assert_eq!(
+        unknown.headers().get(REASON_HEADER),
+        wrong.headers().get(REASON_HEADER)
+    );
+    assert_eq!(body_bytes(unknown).await, body_bytes(wrong).await);
 }
 
 #[tokio::test]
@@ -438,6 +465,54 @@ async fn bundle_file_is_served() {
     )
     .await;
     assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+}
+
+/// The bundle is a self-update channel: a client replaces every file listed in
+/// its manifest. A stray file in the staging directory must therefore never be
+/// listed or served, or it could overwrite the client's `auth` or config.
+#[tokio::test]
+async fn bundle_never_serves_files_outside_the_allowlist() {
+    let (state, _dir) = build(vec![account("alpha", "secret", None)], "alpha reports\n");
+    arm(&state, &["alpha"]);
+    stage_bundle(&state);
+    fs::write(state.config.bundle_dir().join("auth"), b"alpha:leaked\n").unwrap();
+    fs::write(
+        state.config.bundle_dir().join("lanpull.conf"),
+        b"SERVER_URL=x\n",
+    )
+    .unwrap();
+
+    let manifest = call(
+        &state,
+        request(
+            "GET",
+            "/_lanpull/client/manifest.json",
+            Some("alpha:secret"),
+            [127, 0, 0, 1],
+        ),
+    )
+    .await;
+    let bytes = body_bytes(manifest).await;
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let names: Vec<&str> = parsed["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| file["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["VERSION", "pull.py"]);
+
+    let auth = call(
+        &state,
+        request(
+            "GET",
+            "/_lanpull/client/auth",
+            Some("alpha:secret"),
+            [127, 0, 0, 1],
+        ),
+    )
+    .await;
+    assert_eq!(auth.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

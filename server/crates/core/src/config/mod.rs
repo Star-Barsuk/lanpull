@@ -122,6 +122,23 @@ pub struct Config {
     pub audit_log: PathBuf,
 }
 
+/// The transport settings a server needs, independent of the domain.
+///
+/// Kept separate from [`Config`] so a caller can start the HTTP layer from a
+/// programmatic value (a test, an embedding, or a future service) without a
+/// lanpull configuration file.
+#[derive(Debug, Clone)]
+pub struct ServerSettings {
+    /// Address the server binds to.
+    pub bind: IpAddr,
+    /// TCP port the server listens on.
+    pub port: u16,
+    /// Path to the PEM certificate.
+    pub cert_path: PathBuf,
+    /// Path to the PEM private key.
+    pub key_path: PathBuf,
+}
+
 /// Resolve the configuration path from an explicit flag and the environment.
 ///
 /// A path passed explicitly (or in `$LANPULL_CONFIG`) must exist: a typo in an
@@ -289,6 +306,16 @@ impl Config {
             networks_path,
             audit_log,
         })
+    }
+
+    /// The transport settings, without any domain configuration.
+    pub fn server_settings(&self) -> ServerSettings {
+        ServerSettings {
+            bind: self.bind,
+            port: self.port,
+            cert_path: self.cert_path.clone(),
+            key_path: self.key_path.clone(),
+        }
     }
 
     /// Directory holding generated manifests (full and per-account).

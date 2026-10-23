@@ -44,6 +44,14 @@ pub struct Record {
     /// Rejection reason, when the request was refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Per-process request identifier, used to correlate log lines.
+    ///
+    /// Defaulted so audit logs written before the field existed still parse.
+    #[serde(default)]
+    pub request_id: String,
+    /// Time spent handling the request, in milliseconds.
+    #[serde(default)]
+    pub latency_ms: u64,
 }
 
 /// Append one record as a JSON line.

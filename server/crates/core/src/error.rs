@@ -115,6 +115,29 @@ impl Error {
         }
     }
 
+    /// The HTTP status a transport should map this error to.
+    ///
+    /// Kept as a plain `u16` so the core crate stays independent of any HTTP
+    /// library; the transport converts it once, in one place.
+    pub const fn http_status(&self) -> u16 {
+        match self {
+            Self::Denied(_) => 403,
+            Self::Busy(_) => 429,
+            Self::Usage(_) | Self::UnsafePath(_) | Self::BadPath { .. } => 400,
+            Self::NotInitialized(_) | Self::Server(_) => 503,
+            Self::Config(_)
+            | Self::Cancelled(_)
+            | Self::Io(_)
+            | Self::Json(_)
+            | Self::Duration(_)
+            | Self::Manifest(_)
+            | Self::Account(_)
+            | Self::Network(_)
+            | Self::Password(_)
+            | Self::Certificate(_) => 500,
+        }
+    }
+
     /// An actionable hint to print after the error, when one helps.
     pub const fn hint(&self) -> Option<&'static str> {
         match self {

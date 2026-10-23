@@ -499,11 +499,17 @@ fn bundle_builds_and_finds_files() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("VERSION"), b"1.2.3\n").unwrap();
     fs::write(dir.path().join("pull.py"), b"print('hi')\n").unwrap();
+    // A stray credential or configuration file must never enter the bundle.
+    fs::write(dir.path().join("auth"), b"alpha:secret\n").unwrap();
+    fs::write(dir.path().join("lanpull.conf"), b"SERVER_URL=x\n").unwrap();
 
     let manifest = bundle::build(dir.path()).unwrap();
     assert_eq!(manifest.version, "1.2.3");
     assert!(bundle::contains(&manifest, "pull.py"));
     assert!(!bundle::contains(&manifest, "auth"));
+    assert!(!bundle::contains(&manifest, "lanpull.conf"));
+    assert!(bundle::is_allowed("VERSION"));
+    assert!(!bundle::is_allowed("auth"));
     let pull = manifest.files.iter().find(|f| f.path == "pull.py").unwrap();
     assert_eq!(pull.size, 12);
 }
@@ -576,6 +582,8 @@ fn audit_report_aggregates() {
             status: 200,
             bytes: 100,
             reason: None,
+            request_id: "test-1".to_string(),
+            latency_ms: 3,
         },
     )
     .unwrap();
@@ -591,6 +599,8 @@ fn audit_report_aggregates() {
             status: 401,
             bytes: 0,
             reason: Some("not_armed".to_string()),
+            request_id: "test-2".to_string(),
+            latency_ms: 1,
         },
     )
     .unwrap();
