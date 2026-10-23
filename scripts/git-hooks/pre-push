@@ -1,0 +1,23 @@
+#!/bin/sh
+# Copyright (c) 2026 Star-Barsuk
+# SPDX-License-Identifier: MIT
+#
+# pre-push safety net: the fast gates plus the secret scan.
+#
+# This hook is not the gate. The gate is `make ci-full`; a hook can always be
+# bypassed with `git push --no-verify`, and it is not installed automatically
+# in a fresh clone (run `make hooks` once).
+#
+# It deliberately skips the test suite and the loopback e2e round: they take
+# long enough that they belong in `make ci-full`, run before the push.
+
+set -eu
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+printf 'pre-push: fmt-check, clippy, cargo-deny, ruff, secrets\n' >&2
+make -C server fmt-check lint deny
+make -C client lint
+make secrets
+printf 'pre-push: ok\n' >&2

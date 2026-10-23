@@ -58,7 +58,7 @@ UNINSTALL_CMD = $(SCRIPTS)/uninstall.sh --binary "$(LANPULL)" --unit "$(UNIT)" \
 	--service "$(SERVICE)"
 
 .PHONY: help setup build install uninstall wipe \
-        clean distclean confirm check-tools check-scripts cli-test e2e client-bundle \
+        clean distclean confirm check-tools check-scripts check-core cli-test e2e client-bundle \
         fmt fmt-check lint doc test machete deny audit audit-bin geiger security ci
 
 help: ## Show available targets
@@ -115,6 +115,14 @@ check-tools: ## Fail early when a gate tool is missing (run make setup)
 		}; \
 	done
 
+check-core: ## Enforce that lanpull-core stays free of the HTTP stack
+	@deps=$$($(CARGO) tree -p lanpull-core -e normal --prefix none 2>/dev/null); \
+	if printf '%s\n' "$$deps" | grep -Eq '^(axum|axum-server|tower|tower-http|hyper|hyper-util) v'; then \
+		echo "lanpull: lanpull-core must not depend on the HTTP stack" >&2; \
+		printf '%s\n' "$$deps" | grep -E '^(axum|axum-server|tower|tower-http|hyper|hyper-util) v' >&2; \
+		exit 1; \
+	fi
+
 check-scripts: ## Parse the server shell scripts (shellcheck runs when installed)
 	@for script in $(SCRIPTS)/*.sh; do sh -n "$$script" || exit 1; done
 	@if command -v shellcheck >/dev/null 2>&1; then \
@@ -164,4 +172,4 @@ geiger: ## Report unsafe usage across the dependency tree
 
 security: deny audit audit-bin geiger ## Run every supply-chain security check
 
-ci: check-tools check-scripts fmt-check lint doc test machete cli-test security ## Run every Rust quality and security gate
+ci: check-tools check-scripts check-core fmt-check deny audit machete lint test doc cli-test audit-bin geiger ## Run every Rust quality and security gate
