@@ -7,7 +7,7 @@
 
 SHELL := /bin/sh
 
-.PHONY: help setup ci ci-full secrets hooks hooks-uninstall
+.PHONY: help setup ci ci-full secrets docs-check hooks hooks-uninstall
 
 help: ## Show available targets
 	@printf 'Server targets:\n'
@@ -18,6 +18,7 @@ help: ## Show available targets
 	@printf '  %-16s %s\n' ci "Fast inner loop: both sides, no e2e or secret scan"
 	@printf '  %-16s %s\n' ci-full "The gate: ci, loopback e2e, and the secret scan"
 	@printf '  %-16s %s\n' secrets "Scan tracked files for credentials (gitleaks or fallback)"
+	@printf '  %-16s %s\n' docs-check "Check links, the public/private boundary, and the version"
 	@printf '  %-16s %s\n' hooks "Install the pre-push hook (fast gates and secret scan)"
 	@printf '  %-16s %s\n' hooks-uninstall "Remove the pre-push hook"
 	@printf '  %-16s %s\n' setup "Install both toolchains"
@@ -30,13 +31,16 @@ ci: ## Run every quality and security gate on both sides
 	@$(MAKE) --no-print-directory -C server ci
 	@$(MAKE) --no-print-directory -C client ci
 
-# The single gate named in AGENTS.md: cheap checks first, then the full suite,
+# The single gate named in the project rules: cheap checks first, then the full suite,
 # then the loopback end-to-end round.
-ci-full: secrets ci
+ci-full: secrets docs-check ci
 	@$(MAKE) --no-print-directory -C server e2e
 
 secrets: ## Scan tracked files for credentials
 	@scripts/secret-scan.sh
+
+docs-check: ## Check links, the public/private boundary, and the version
+	@scripts/docs-check.sh
 
 hooks: ## Install the pre-push hook
 	@install -Dm755 scripts/git-hooks/pre-push .git/hooks/pre-push
