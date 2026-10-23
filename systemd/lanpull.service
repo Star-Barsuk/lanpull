@@ -24,14 +24,27 @@ TimeoutStopSec=15
 # state directory only.
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=__LANPULL_STATE_DIR__
 ProtectKernelTunables=true
 ProtectKernelModules=true
+ProtectKernelLogs=true
 ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# A port below 1024 would need CAP_NET_BIND_SERVICE here; the default 8000 needs none.
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+RemoveIPC=true
