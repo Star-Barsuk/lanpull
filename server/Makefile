@@ -59,7 +59,7 @@ UNINSTALL_CMD = $(SCRIPTS)/uninstall.sh --binary "$(LANPULL)" --unit "$(UNIT)" \
 
 .PHONY: help setup build install uninstall wipe \
         clean distclean confirm check-tools check-scripts check-core cli-test e2e client-bundle \
-        fmt fmt-check lint doc test coverage machete deny audit audit-bin geiger security ci
+        fmt fmt-check lint doc test coverage fuzz machete deny audit audit-bin geiger security ci
 
 help: ## Show available targets
 	@$(SCRIPTS)/help.sh
@@ -155,6 +155,19 @@ coverage: ## Report test coverage (cargo-llvm-cov; not a gate)
 		exit 1; \
 	}
 	$(CARGO) llvm-cov --locked --workspace --summary-only
+
+FUZZ_TARGETS := config glob manifest relpath
+FUZZ_TIME    ?= 20
+
+fuzz: ## Run a short fuzz smoke over the parsers (nightly + cargo-fuzz; not a gate)
+	@command -v cargo-fuzz >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-fuzz; run 'cargo install cargo-fuzz --locked' and 'rustup toolchain install nightly'" >&2; \
+		exit 1; \
+	}
+	@for target in $(FUZZ_TARGETS); do \
+		echo "fuzz: $$target ($(FUZZ_TIME)s)"; \
+		$(CARGO) +nightly fuzz run $$target -- -max_total_time=$(FUZZ_TIME) -rss_limit_mb=2048 || exit 1; \
+	done
 
 machete: ## Check for unused dependencies in every crate
 	$(CARGO) machete

@@ -289,6 +289,7 @@ make secrets         # tracked-file secret scan (gitleaks or fallback)
 make docs-check      # links, the public/private boundary, the client version
 make check-scripts   # repository shell scripts (sh -n and shellcheck)
 make coverage        # coverage report (advisory; make client-coverage too)
+make -C server fuzz  # nightly fuzz smoke of the parsers (not part of the gate)
 make hooks           # install the optional pre-push net
 ```
 
