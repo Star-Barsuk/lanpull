@@ -5,8 +5,6 @@ minimal and in scope.
 
 ## Before you start
 
-- Read [the engineering standard](ENGINEERING_STANDARD.md). It is the process
-  contract for this repository.
 - Open an issue to discuss a non-trivial change before writing code.
 - Keep the public surface documented: update `README.md` and
   [the reference](REFERENCE.md) when behavior, flags, configuration keys, or

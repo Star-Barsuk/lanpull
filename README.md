@@ -295,8 +295,7 @@ create their uv-managed `.venv` on first run (`make -C client setup`). The
 toolchain (`server/rust-toolchain.toml`) and the gate tools are pinned to
 known-good versions; bump them deliberately, never inline. There is intentionally
 **no hosted CI**: the gate is `make ci-full`, run deliberately before a push, and
-the pre-push hook is a net rather than the gate. The process is in
-[docs/ENGINEERING_STANDARD.md](docs/ENGINEERING_STANDARD.md).
+the pre-push hook is a net rather than the gate.
 
 ---
 

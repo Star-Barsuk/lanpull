@@ -24,8 +24,8 @@ note() {
 
 # --- 1. Public/private boundary -----------------------------------------
 # The public files and trees a reader can reach from the repository.
-public_paths="README.md docs/REFERENCE.md docs/SECURITY.md docs/CONTRIBUTING.md docs/ENGINEERING_STANDARD.md client server config systemd Makefile scripts"
-allowed_docs="REFERENCE.md SECURITY.md CONTRIBUTING.md ENGINEERING_STANDARD.md"
+public_paths="README.md docs/REFERENCE.md docs/SECURITY.md docs/CONTRIBUTING.md client server config systemd Makefile scripts"
+allowed_docs="REFERENCE.md SECURITY.md CONTRIBUTING.md"
 
 # shellcheck disable=SC2086 # the path list is intentionally split into arguments
 references=$(cd "$root" && grep -rn \
@@ -47,7 +47,7 @@ fi
 # The project notes are private too; a public file must not name them.
 # shellcheck disable=SC2086 # the path list is intentionally split into arguments
 private_notes=$(cd "$root" && grep -rn --exclude-dir=target --exclude-dir=.venv \
-    --exclude-dir=.git --exclude-dir=node_modules -E 'AGENTS\.md' $public_paths 2>/dev/null || true)
+    --exclude-dir=.git --exclude-dir=node_modules -E 'AGENTS\.md|ENGINEERING_STANDARD\.md' $public_paths 2>/dev/null || true)
 if [ -n "$private_notes" ]; then
     while IFS= read -r line; do
         [ -n "$line" ] && note "private project notes referenced from a public file: $line"
