@@ -179,7 +179,7 @@ when the account is created. A rule that names an unknown share is rejected.
 | Command | Purpose |
 | --- | --- |
 | `account add <name>` | Create an account and stage a client folder (`--output <dir>`, `--ip <ip>`, `--local`, `--dry-run`). |
-| `account remove <name>` | Revoke an account, drop its policy deltas, and clear its arm window (`--yes`, `--dry-run`). |
+| `account remove <name>` | Revoke an account, drop its policy deltas, clear its arm window, and delete its staged client folder (which holds the plaintext `auth`) (`--yes`, `--dry-run`). |
 | `account list` | List accounts with their IP, scope, and effective rules. |
 | `account passwd <name>` | Rotate the password and refresh the staged `auth` file (`--output <dir>`). |
 | `account export <name>` | Copy the staged folder for transfer to the client (`--to <dir>`, `--move`, `--force`, `--dry-run`). |
@@ -362,7 +362,7 @@ mirrored a final `total:` line combines them.
 | `CLIENTS_PATH` | Account file. Relative paths resolve against the config file. | `lanpull.clients` |
 | `ACCESS_PATH` | JSON access policy. Relative paths resolve against the config file. | `lanpull.access.json` |
 | `NETWORKS_PATH` | JSON network profiles. Relative paths resolve against the config file. | `lanpull.networks.json` |
-| `AUDIT_LOG` | JSON-lines audit log. | `/var/lib/lanpull/access.log` |
+| `AUDIT_LOG` | JSON-lines audit log; rotates to `<name>.1` at 16 MiB. | `/var/lib/lanpull/access.log` |
 
 The real file is mode 640 and is never committed. Blank lines and `#` comments
 are ignored, values may be quoted, and `$NAME`/`${NAME}` environment references

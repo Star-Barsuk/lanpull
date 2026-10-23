@@ -2,8 +2,9 @@
 # Copyright (c) 2026 Star-Barsuk
 # SPDX-License-Identifier: MIT
 #
-# Remove repository-local runtime leftovers. Invoked by `make distclean`; it
-# prunes version control, build outputs, and the client virtual environment.
+# Remove repository-local runtime leftovers. Invoked by `make distclean`; the
+# version-control, build-output, and client-virtualenv trees are skipped, and
+# only lanpull's own runtime files are removed.
 
 set -eu
 

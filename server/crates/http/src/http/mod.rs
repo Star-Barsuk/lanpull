@@ -50,7 +50,7 @@ pub(crate) const MAX_HOST_LEN: usize = 255;
 /// Accounts, the access policy, and arm state are re-read (through
 /// [`LiveCache`]) on every request so that `account remove`, `account passwd`,
 /// `account arm`, `account disarm`, and policy edits take effect immediately
-/// without restarting the server (`docs/SPEC.md` sections 8 and 13).
+/// without restarting the server.
 #[derive(Clone)]
 pub struct AppState {
     /// Server configuration.

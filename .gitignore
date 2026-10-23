@@ -13,6 +13,7 @@ docs/*
 !docs/CONTRIBUTING.md
 !docs/SECURITY.md
 !docs/REFERENCE.md
+!docs/ENGINEERING_STANDARD.md
 
 # --- Private operator tooling (not committed) -----------------------------
 tools/

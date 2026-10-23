@@ -2,7 +2,7 @@
 //!
 //! `lanpull status` and server startup compare the newest share file against
 //! the manifest and report symlinks, reserved-prefix entries, and armed
-//! accounts (`docs/SPEC.md` section 11).
+//! accounts.
 
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;

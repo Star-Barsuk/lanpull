@@ -48,7 +48,9 @@ allow = [
 multiple-versions = "deny"
 wildcards = "deny"
 deny = [
-    # TLS is rustls only; the server never links a C TLS stack.
+    # TLS is rustls only: no OpenSSL, no platform TLS. The crypto provider
+    # (AWS-LC) is a C/assembly library, so this bans the TLS stack, not all C
+    # code in the build.
     { crate = "openssl", use-instead = "rustls" },
     { crate = "openssl-sys", use-instead = "rustls" },
     { crate = "native-tls", use-instead = "rustls" },

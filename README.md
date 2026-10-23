@@ -282,19 +282,21 @@ Each side carries its own Makefile and its own static-analysis configuration;
 the root `Makefile` forwards to both.
 
 ```bash
-make -C server ci    # shell scripts, rustfmt, Clippy, rustdoc, tests, machete, CLI test, deny, audit, audit bin, geiger
-make -C client ci    # ruff check/format, mypy --strict, pytest, pip-audit
+make ci              # fast loop: both sides, no e2e, no secret scan
+make ci-full         # the gate: secrets, docs check, both sides, loopback e2e
 make -C server e2e   # loopback end-to-end round of the real server and pull.py
-make -C server cli-test  # operator-style CLI checks (binary only)
-make ci              # both sides' quality gates
+make secrets         # tracked-file secret scan (gitleaks or fallback)
+make docs-check      # links, the public/private boundary, the client version
+make hooks           # install the optional pre-push net
 ```
 
 `make setup` installs the Rust target and the pinned gate tools; the client gates
 create their uv-managed `.venv` on first run (`make -C client setup`). The
 toolchain (`server/rust-toolchain.toml`) and the gate tools are pinned to
 known-good versions; bump them deliberately, never inline. There is intentionally
-**no CI workflow and no git hook** — the gates are run deliberately with
-`make ci`.
+**no hosted CI**: the gate is `make ci-full`, run deliberately before a push, and
+the pre-push hook is a net rather than the gate. The process is in
+[docs/ENGINEERING_STANDARD.md](docs/ENGINEERING_STANDARD.md).
 
 ---
 
@@ -322,7 +324,7 @@ More symptoms and every command flag are in [docs/REFERENCE.md](docs/REFERENCE.m
 ## 🤝 Contributing
 
 Bug reports, ideas, and patches are welcome; the guidelines are in
-[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md). Run `make ci` before opening a
+[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md). Run `make ci-full` before opening a
 pull request.
 
 ## 📄 License

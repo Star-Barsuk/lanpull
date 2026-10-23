@@ -8,7 +8,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Process exit codes used by the `lanpull` binary.
 ///
-/// The contract is documented in `docs/SPEC.md`:
+/// The exit-code contract:
 /// - `0` success;
 /// - `1` an operational failure;
 /// - `2` a usage error (also produced by `clap`);
