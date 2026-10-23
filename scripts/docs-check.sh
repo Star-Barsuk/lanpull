@@ -44,15 +44,22 @@ $references
 EOF
 fi
 
-# The project notes are private too; a public file must not name them.
+# Public files may only name the public documents. A bare name (without the
+# docs/ prefix) is still a reference, so the allowlist is applied to every
+# Markdown file name a public file mentions.
+allowed_names="README.md REFERENCE.md SECURITY.md CONTRIBUTING.md"
 # shellcheck disable=SC2086 # the path list is intentionally split into arguments
-private_notes=$(cd "$root" && grep -rn --exclude-dir=target --exclude-dir=.venv \
-    --exclude-dir=.git --exclude-dir=node_modules -E 'AGENTS\.md|ENGINEERING_STANDARD\.md' $public_paths 2>/dev/null || true)
-if [ -n "$private_notes" ]; then
-    while IFS= read -r line; do
-        [ -n "$line" ] && note "private project notes referenced from a public file: $line"
+mentions=$(cd "$root" && grep -rhoE --exclude-dir=target --exclude-dir=.venv \
+    --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=fixtures '[A-Za-z0-9_-]+\.md' $public_paths 2>/dev/null | sort -u || true)
+if [ -n "$mentions" ]; then
+    while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        case " $allowed_names " in
+            *" $name "*) ;;
+            *) note "public file names a non-public document: $name" ;;
+        esac
     done <<EOF
-$private_notes
+$mentions
 EOF
 fi
 

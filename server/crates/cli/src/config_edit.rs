@@ -95,8 +95,7 @@ fn is_canonical(config_path: &Path) -> bool {
 ///
 /// The atomic write replaces the file, so a normal user would leave it owned by
 /// itself, breaking the `root:<operator-group>` mode `0640` contract of
-/// `DECISIONS.md` D71. The accounts and policy files are operator-owned and are
-/// not affected.
+/// The accounts and policy files are operator-owned and are not affected.
 fn require_canonical_root(config_path: &Path) -> Result<()> {
     if is_canonical(config_path) && crate::init::effective_uid() != 0 {
         return Err(Error::Usage(format!(
@@ -111,7 +110,6 @@ fn require_canonical_root(config_path: &Path) -> Result<()> {
 ///
 /// The group is the group of `/etc/lanpull` (the operator group set by
 /// `install`); the owner is root and the mode is `0640`, matching
-/// `DECISIONS.md` D71.
 fn normalize_canonical(config_path: &Path) -> Result<()> {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 

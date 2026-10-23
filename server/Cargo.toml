@@ -103,5 +103,5 @@ missing_panics_doc = "allow"
 must_use_candidate = "allow"
 similar_names = "allow"
 # Transitive duplicates in third-party dependencies are accepted; cargo-deny
-# still checks duplicates on the actual musl build graph (DECISIONS.md D46).
+# still checks duplicates on the actual musl build graph.
 multiple_crate_versions = "allow"

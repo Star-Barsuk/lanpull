@@ -58,7 +58,7 @@ deny = [
 ]
 
 # Transitive duplicates we neither own nor control. Each entry is version
-# pinned so a genuinely new duplicate still fails the gate (DECISIONS.md D46).
+# pinned so a genuinely new duplicate still fails the gate.
 [[bans.skip]]
 name = "getrandom"
 version = "=0.2.17"
