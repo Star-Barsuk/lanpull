@@ -72,10 +72,16 @@ pub fn run(config_path: &Path, args: &InitArgs) -> Result<Outcome> {
     }
 
     std::fs::create_dir_all(config_dir)?;
+    // A share created under `sudo` must belong to the operator, who is the one
+    // who writes the files and runs the service; a root-owned 0755 directory
+    // would leave the documented workflow unwritable.
     for (_, dir) in &shares {
         if !dir.is_dir() {
             std::fs::create_dir_all(dir)?;
+            adopt_created_dir(dir)?;
         }
+    }
+    for (_, dir) in &shares {
         ensure_share_ignore(dir)?;
     }
     create_state_dir(&state_dir)?;
@@ -177,6 +183,34 @@ const IGNORE_TEMPLATE: &str = "\
 #   drafts/**
 #   !build/keep.txt
 ";
+
+/// Give a just-created share directory to the invoking user when run as root.
+///
+/// `sudo lanpull init` creates the default share before the operator can; the
+/// operator (not root) owns the content and runs the service, so the directory
+/// is handed over via `$SUDO_UID`/`$SUDO_GID`. Without those variables (for
+/// example `sudo -i`), the directory stays root-owned and the warning says what
+/// to do about it.
+fn adopt_created_dir(path: &Path) -> Result<()> {
+    if effective_uid() != 0 {
+        return Ok(());
+    }
+    let uid = std::env::var("SUDO_UID")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok());
+    let gid = std::env::var("SUDO_GID")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok());
+    if let (Some(uid), Some(gid)) = (uid, gid) {
+        std::os::unix::fs::chown(path, Some(uid), Some(gid))?;
+    } else {
+        tracing::warn!(
+            path = %path.display(),
+            "share created as root and $SUDO_UID is unset; chown it to the operator before use"
+        );
+    }
+    Ok(())
+}
 
 /// Create `<dir>/.lanpullignore` if it is absent, owned like the share
 /// directory.
@@ -308,7 +342,7 @@ fn detect_server_ip() -> Result<IpAddr> {
         while let Some(field) = fields.next() {
             if field == "src" {
                 if let Some(addr) = fields.next() {
-                    if let Ok(ip) = addr.parse::<IpAddr>() {
+                    if let Some(ip) = addr.parse::<IpAddr>().ok().filter(|ip| is_lan_address(*ip)) {
                         return Ok(ip);
                     }
                 }
@@ -316,6 +350,57 @@ fn detect_server_ip() -> Result<IpAddr> {
         }
     }
     Err(Error::Config(
-        "could not detect the LAN address; pass --server-ip".to_string(),
+        "could not detect a private LAN address from the default route; pass --server-ip"
+            .to_string(),
     ))
+}
+
+/// Return `true` for the addresses a LAN deployment may use.
+///
+/// The certificate binds this address, so a public or tunnel address would
+/// produce a certificate the clients cannot verify. RFC1918 IPv4 addresses and
+/// loopback (for a development round and the self-share) are accepted.
+const fn is_lan_address(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_private() || v4.is_loopback(),
+        IpAddr::V6(v6) => v6.is_loopback(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::missing_assert_message)]
+
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
+    use super::*;
+
+    #[test]
+    fn private_and_loopback_addresses_are_lan_addresses() {
+        for ip in [
+            Ipv4Addr::new(10, 0, 0, 5),
+            Ipv4Addr::new(172, 16, 4, 1),
+            Ipv4Addr::new(192, 168, 1, 10),
+            Ipv4Addr::LOCALHOST,
+        ] {
+            assert!(is_lan_address(IpAddr::V4(ip)));
+        }
+        assert!(is_lan_address(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+    }
+
+    #[test]
+    fn public_and_cgnat_addresses_are_not_lan_addresses() {
+        for ip in [
+            Ipv4Addr::new(8, 8, 8, 8),
+            Ipv4Addr::new(203, 0, 113, 7),
+            Ipv4Addr::new(100, 64, 0, 1),
+        ] {
+            assert!(!is_lan_address(IpAddr::V4(ip)));
+        }
+        // Only loopback IPv6 is accepted; a global or unique-local address is
+        // not bound to a LAN here.
+        assert!(!is_lan_address(IpAddr::V6(Ipv6Addr::new(
+            0x2001, 0xdb8, 0, 0, 0, 0, 0, 1
+        ))));
+    }
 }
