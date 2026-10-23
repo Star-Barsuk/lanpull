@@ -124,7 +124,7 @@ class Progress:
 
     def show(self, path: str, done: int, size: int) -> None:
         """Print the percentage, transfer rate, and ETA of the current file."""
-        if self.quiet:
+        if self.quiet or not sys.stdout.isatty():
             return
         percent = 100 if size <= 0 else min(100, done * 100 // size)
         line = f"\r[{self.index}/{self.total}] {path} {percent}%"
@@ -139,7 +139,7 @@ class Progress:
 
     def finish(self) -> None:
         """Terminate the progress line."""
-        if self.quiet:
+        if self.quiet or not sys.stdout.isatty():
             return
         sys.stdout.write("\n")
         sys.stdout.flush()

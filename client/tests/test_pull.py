@@ -9,6 +9,7 @@ import json
 import os
 import re
 import ssl
+import sys
 import time
 from pathlib import Path
 from typing import cast
@@ -179,6 +180,51 @@ def test_scan_extras_keeps_server_ignored_paths(tmp_path: Path) -> None:
     (mirror / ".git" / "HEAD").write_text("ref", encoding="utf-8")
     (mirror / "junk.txt").write_text("x", encoding="utf-8")
     assert pull.scan_extras(mirror, set()) == ["junk.txt"]
+
+
+def test_progress_is_silent_without_a_tty(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Capture:
+        def __init__(self) -> None:
+            self.written: list[str] = []
+
+        def isatty(self) -> bool:
+            return False
+
+        def write(self, text: str) -> None:
+            self.written.append(text)
+
+        def flush(self) -> None:
+            """No buffered output."""
+
+    capture = _Capture()
+    monkeypatch.setattr(sys, "stdout", capture)
+    progress = pull.Progress(1, 1)
+    progress.show("a.bin", 10, 100)
+    progress.finish()
+    assert capture.written == []
+
+
+def test_progress_writes_on_a_tty(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Capture:
+        def __init__(self) -> None:
+            self.written: list[str] = []
+
+        def isatty(self) -> bool:
+            return True
+
+        def write(self, text: str) -> None:
+            self.written.append(text)
+
+        def flush(self) -> None:
+            """No buffered output."""
+
+    capture = _Capture()
+    monkeypatch.setattr(sys, "stdout", capture)
+    progress = pull.Progress(1, 1)
+    progress.show("a.bin", 10, 100)
+    progress.finish()
+    assert "a.bin" in "".join(capture.written)
+    assert capture.written[-1] == "\n"
 
 
 def test_format_bytes() -> None:
