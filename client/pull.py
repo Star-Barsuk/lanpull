@@ -61,6 +61,10 @@ RESERVED = "_lanpull"
 CHUNK = 64 * 1024
 TIMEOUT = 120
 LIST_CAP = 50
+# Attempts per file on a transport error; the partial file and its validator
+# are kept between attempts, so a retry resumes instead of restarting.
+MAX_ATTEMPTS = 3
+RETRY_DELAY_CAP = 5
 
 OK = "OK"
 NEED = "NEED"
@@ -466,6 +470,7 @@ class HttpClient:
         self._context = context
         self._credentials = credentials
         self._hostname = hostname
+        self._connection: http.client.HTTPSConnection | None = None
 
     @property
     def credentials(self) -> str:
@@ -483,10 +488,28 @@ class HttpClient:
         return result
 
     def connect(self) -> http.client.HTTPSConnection:
-        """Open a new HTTPS connection."""
-        return http.client.HTTPSConnection(
-            self._host, self._port, context=self._context, timeout=TIMEOUT
-        )
+        """Return the shared HTTPS connection, opening it on first use.
+
+        A run reuses one TLS session for every request, so a pull round does
+        not pay a handshake per file. A transport error calls ``reset`` and the
+        next request starts from a clean socket.
+        """
+        if self._connection is None:
+            self._connection = http.client.HTTPSConnection(
+                self._host, self._port, context=self._context, timeout=TIMEOUT
+            )
+        return self._connection
+
+    def reset(self) -> None:
+        """Drop the shared connection after a transport error."""
+        if self._connection is not None:
+            with contextlib.suppress(OSError):
+                self._connection.close()
+            self._connection = None
+
+    def close(self) -> None:
+        """Close the shared connection."""
+        self.reset()
 
     def get_json(self, path: str, unavailable: str) -> dict[str, Any]:
         """Fetch and parse a small JSON document."""
@@ -494,6 +517,9 @@ class HttpClient:
         try:
             connection.request("GET", path, headers=self.headers())
             response = connection.getresponse()
+            if response.status != 200:
+                # Drain the small error body so the connection stays usable.
+                response.read()
             if response.status == 401:
                 raise FatalError(auth_failure_message(response, self._credentials))
             if response.status == 403:
@@ -504,11 +530,11 @@ class HttpClient:
                 raise FatalError(f"ERROR: server returned {response.status} for {path}")
             body = response.read()
         except ssl.SSLError as exc:
+            self.reset()
             raise FatalError("ERROR: server certificate does not match server.crt") from exc
         except (OSError, http.client.HTTPException) as exc:
+            self.reset()
             raise FatalError(f"ERROR: cannot reach {self._host}: {exc}") from exc
-        finally:
-            connection.close()
 
         try:
             data = json.loads(body)
@@ -559,9 +585,16 @@ def load_partials(path: Path) -> dict[str, str]:
     return {str(key): value for key, value in data.items() if isinstance(value, str)}
 
 
+def write_atomic(path: Path, text: str) -> None:
+    """Write text through a sibling temporary file and an atomic replace."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+
+
 def save_partials(path: Path, partials: dict[str, str]) -> None:
     """Persist the resume validators."""
-    path.write_text(json.dumps(partials, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    write_atomic(path, json.dumps(partials, sort_keys=True, indent=2) + "\n")
 
 
 def load_state(path: Path) -> dict[str, set[str]]:
@@ -584,7 +617,7 @@ def load_state(path: Path) -> dict[str, set[str]]:
 def save_state(path: Path, shares: dict[str, set[str]]) -> None:
     """Persist the delivered paths, keyed by share."""
     payload = {share: sorted(files) for share, files in sorted(shares.items())}
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    write_atomic(path, json.dumps(payload, indent=2) + "\n")
 
 
 def manifest_path(share: str) -> str:
@@ -692,7 +725,10 @@ def render_changes(
 
 def check_space(output: Path, needed: int) -> None:
     """Warn when the mirror may not have room for the download."""
-    stat = os.statvfs(output)
+    try:
+        stat = os.statvfs(output)
+    except OSError:
+        return
     available = stat.f_bavail * stat.f_frsize
     if available < needed:
         print(
@@ -739,6 +775,7 @@ def download(
             if response.status == 401:
                 raise FatalError(auth_failure_message(response, client.credentials))
             if response.status == 403:
+                client.reset()
                 raise PerFileError(f"ERROR: {entry.path}: access denied (403)")
             if response.status == 416:
                 response.read()
@@ -748,6 +785,7 @@ def download(
                     continue
                 raise PerFileError(f"ERROR: {entry.path}: range not satisfiable")
             if response.status not in (200, 206):
+                client.reset()
                 raise PerFileError(f"ERROR: {entry.path}: server returned {response.status}")
             if response.status == 200 and resume_from:
                 part.unlink(missing_ok=True)
@@ -771,11 +809,16 @@ def download(
             progress.finish()
             return
         except ssl.SSLError as exc:
+            client.reset()
             raise FatalError("ERROR: server certificate does not match server.crt") from exc
         except (OSError, http.client.HTTPException) as exc:
-            raise PerFileError(f"ERROR: {entry.path}: {exc}") from exc
-        finally:
-            connection.close()
+            client.reset()
+            if attempts >= MAX_ATTEMPTS:
+                raise PerFileError(
+                    f"ERROR: {entry.path}: {exc} (gave up after {attempts} attempts)"
+                ) from exc
+            time.sleep(min(2 ** (attempts - 1), RETRY_DELAY_CAP))
+            continue
 
 
 def fetch_entry(
@@ -1072,6 +1115,8 @@ def download_bundle_file(client: HttpClient, name: str, part: Path) -> None:
     try:
         connection.request("GET", remote, headers=client.headers())
         response = connection.getresponse()
+        if response.status != 200:
+            client.reset()
         if response.status == 401:
             raise FatalError(auth_failure_message(response, client.credentials))
         if response.status == 503:
@@ -1087,11 +1132,11 @@ def download_bundle_file(client: HttpClient, name: str, part: Path) -> None:
                     break
                 handle.write(chunk)
     except ssl.SSLError as exc:
+        client.reset()
         raise FatalError("ERROR: server certificate does not match server.crt") from exc
     except (OSError, http.client.HTTPException) as exc:
+        client.reset()
         raise FatalError(f"ERROR: cannot reach the server: {exc}") from exc
-    finally:
-        connection.close()
 
 
 def run_self_update(cdir: Path, client: HttpClient, assume_yes: bool = False) -> int:
@@ -1369,6 +1414,7 @@ def main(argv: list[str] | None = None) -> int:
     """Entry point."""
     options = parse_args(sys.argv[1:] if argv is None else argv)
     directory = client_dir()
+    client: HttpClient | None = None
     try:
         conf_path = directory / CONF_NAME
         conf = parse_conf(conf_path.read_text(encoding="utf-8")) if conf_path.is_file() else {}
@@ -1394,6 +1440,21 @@ def main(argv: list[str] | None = None) -> int:
     except PerFileError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        print("ERROR: interrupted", file=sys.stderr)
+        return 2
+    except EOFError:
+        print(
+            "ERROR: no interactive input; pass --yes or --delete (or run in a terminal)",
+            file=sys.stderr,
+        )
+        return 2
+    except OSError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    finally:
+        if client is not None:
+            client.close()
 
 
 if __name__ == "__main__":

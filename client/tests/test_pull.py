@@ -5,9 +5,11 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import http.client
+import json
 import os
 import re
 import ssl
+import time
 from pathlib import Path
 from typing import cast
 
@@ -208,6 +210,73 @@ def test_plan_actions(tmp_path: Path) -> None:
     assert planned[0].action == pull.OK
 
 
+def test_http_client_reuses_its_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    created: list[object] = []
+
+    class _Connection:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            created.append(self)
+
+        def close(self) -> None:
+            """No-op close."""
+
+    monkeypatch.setattr(http.client, "HTTPSConnection", _Connection)
+    client = pull.HttpClient("server", 443, ssl.create_default_context(), "user:password", "host")
+    first = client.connect()
+    assert client.connect() is first
+    assert len(created) == 1
+    client.reset()
+    assert client.connect() is not first
+    assert len(created) == 2
+
+
+def test_save_state_is_atomic(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    pull.save_state(path, {"reports": {"a.txt", "b.txt"}})
+    assert json.loads(path.read_text(encoding="utf-8")) == {"reports": ["a.txt", "b.txt"]}
+    assert not (tmp_path / "state.json.tmp").exists()
+
+
+def test_download_retries_a_transport_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    body = b"resumed"
+    entry = pull.Entry("a.bin", len(body), 1.0, hashlib.sha256(body).hexdigest())
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+
+    class _FlakyClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def connect(self) -> _FlakyClient:
+            return self
+
+        def reset(self) -> None:
+            """No shared connection to drop."""
+
+        def headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
+            return dict(extra or {})
+
+        @property
+        def credentials(self) -> str:
+            return "user:password"
+
+        def request(self, method: str, url: str, **kwargs: object) -> None:
+            """Record the request; the response is scripted."""
+
+        def getresponse(self) -> _FakeResponse:
+            self.calls += 1
+            if self.calls == 1:
+                raise OSError("connection dropped")
+            return _FakeResponse(200, [body], {})
+
+    flaky = _FlakyClient()
+    client = cast("pull.HttpClient", flaky)
+    pull.download(client, "reports", entry, tmp_path, {}, pull.Progress(1, 1, quiet=True))
+    assert flaky.calls == 2
+    assert (tmp_path / "a.bin.part").read_bytes() == body
+
+
 def test_state_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "state.json"
     pull.save_state(path, {"reports": {"b.txt", "a.txt"}, "media": {"x.mp3"}})
@@ -273,6 +342,9 @@ class _FakeClient:
     def connect(self) -> _FakeConnection:
         """Open the next scripted connection."""
         return _FakeConnection(self._responses.pop(0))
+
+    def reset(self) -> None:
+        """No shared connection to drop."""
 
     def headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
         """Echo the extra headers."""
@@ -369,6 +441,9 @@ class _BundleClient:
     def get_json(self, path: str, unavailable: str) -> dict[str, object]:
         """Return the scripted bundle manifest."""
         return self._manifest
+
+    def reset(self) -> None:
+        """No shared connection to drop."""
 
     def connect(self) -> _FakeConnection:
         """Return a connection with the next scripted body."""
@@ -557,6 +632,9 @@ class _ManifestClient:
             if pull.manifest_path(share) == path:
                 return manifest
         raise pull.FatalError(unavailable)
+
+    def reset(self) -> None:
+        """No shared connection to drop."""
 
     def connect(self) -> _FakeConnection:
         """Fail: these tests never download a file."""
