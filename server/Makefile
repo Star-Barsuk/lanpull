@@ -59,7 +59,7 @@ UNINSTALL_CMD = $(SCRIPTS)/uninstall.sh --binary "$(LANPULL)" --unit "$(UNIT)" \
 
 .PHONY: help setup build install uninstall wipe \
         clean distclean confirm check-tools check-scripts check-core cli-test e2e client-bundle \
-        fmt fmt-check lint doc test coverage fuzz machete deny audit audit-bin geiger security ci
+        fmt fmt-check lint doc test coverage bench fuzz machete deny audit audit-bin geiger security ci
 
 help: ## Show available targets
 	@$(SCRIPTS)/help.sh
@@ -148,6 +148,9 @@ doc: ## Build docs and deny warnings (catches broken intra-doc links)
 
 test: ## Run the Rust test suite
 	$(CARGO) test --locked --workspace
+
+bench: ## Run the criterion benchmarks (advisory; not a gate)
+	$(CARGO) bench --workspace
 
 coverage: ## Report test coverage (cargo-llvm-cov; not a gate)
 	@command -v cargo-llvm-cov >/dev/null 2>&1 || { \

@@ -25,6 +25,7 @@ keywords = ["file-transfer", "https", "lan", "backup"]
 categories = ["command-line-utilities", "network-programming"]
 
 [workspace.dependencies]
+criterion = { version = "0.5.1", default-features = false, features = ["cargo_bench_support"] }
 argon2 = { version = "0.5.3", features = ["std"] }
 axum = "0.8.9"
 axum-server = { version = "0.8.0", features = ["tls-rustls"] }
