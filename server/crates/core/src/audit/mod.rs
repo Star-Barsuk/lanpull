@@ -4,7 +4,7 @@
 //! `$STATE_DIR/access.log` as one JSON line. `lanpull report` summarizes it.
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -54,11 +54,34 @@ pub struct Record {
     pub latency_ms: u64,
 }
 
-/// Append one record as a JSON line.
+/// Rotate the audit log once it reaches this size.
+///
+/// The previous file is kept next to the live one as `<name>.1`; `report` reads
+/// the live file only, so a rotation bounds the log instead of growing it
+/// without limit.
+const MAX_LOG_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Rename `path` to `<name>.1` when it is at least `limit` bytes.
+fn rotate_when_larger(path: &Path, limit: u64) -> Result<()> {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return Ok(());
+    };
+    if metadata.len() < limit {
+        return Ok(());
+    }
+    match std::fs::rename(path, path.with_extension("log.1")) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Append one record as a JSON line, rotating the log at the size limit.
 pub fn append(path: &Path, record: &Record) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    rotate_when_larger(path, MAX_LOG_BYTES)?;
     let mut line = serde_json::to_string(record)?;
     line.push('\n');
     let mut file = std::fs::OpenOptions::new()
@@ -104,7 +127,7 @@ pub fn summarize(
 ) -> Result<Report> {
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Report::default()),
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Report::default()),
         Err(e) => return Err(e.into()),
     };
 
@@ -183,7 +206,7 @@ pub fn read_records(
 ) -> Result<Vec<Record>> {
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e.into()),
     };
 
@@ -214,4 +237,45 @@ pub fn read_records(
         records.push(record);
     }
     Ok(records)
+}
+
+#[cfg(test)]
+mod tests {
+    // Tests may unwrap and use bare asserts for brevity; production code may not.
+    #![allow(clippy::unwrap_used, clippy::missing_assert_message)]
+
+    use super::*;
+
+    #[test]
+    fn a_large_log_is_rotated_before_appending() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("access.log");
+        std::fs::write(&path, b"0123456789").unwrap();
+
+        rotate_when_larger(&path, 4).unwrap();
+
+        assert!(!path.exists(), "the live log must be renamed");
+        assert_eq!(
+            std::fs::read(dir.path().join("access.log.1")).unwrap(),
+            b"0123456789"
+        );
+    }
+
+    #[test]
+    fn a_small_log_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("access.log");
+        std::fs::write(&path, b"0123456789").unwrap();
+
+        rotate_when_larger(&path, 100).unwrap();
+
+        assert!(path.exists());
+        assert!(!dir.path().join("access.log.1").exists());
+    }
+
+    #[test]
+    fn a_missing_log_is_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        rotate_when_larger(&dir.path().join("access.log"), 1).unwrap();
+    }
 }

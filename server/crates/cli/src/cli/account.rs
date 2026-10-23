@@ -213,6 +213,12 @@ fn remove(config_path: &Path, name: &str, yes: bool, dry_run: bool) -> Result<Ou
     if dir.is_dir() {
         std::fs::remove_dir_all(&dir)?;
     }
+    // The staged folder holds the plaintext password (`auth`); revoking an
+    // account must not leave that credential behind in the state directory.
+    let staging = config.state_dir.join("client-ready").join(name);
+    if staging.is_dir() {
+        std::fs::remove_dir_all(&staging)?;
+    }
     let mut arm = ArmState::load(&config.arm_path())?;
     let was_armed = arm.disarm(name);
     if was_armed {

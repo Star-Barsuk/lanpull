@@ -170,12 +170,12 @@ pub fn report(config_path: &Path, args: ReportArgs) -> Result<Outcome> {
     ]];
     for account in &accounts {
         rows.push(vec![
-            account.user.clone(),
+            human::sanitize_terminal(&account.user),
             account.last_seen.clone(),
             if account.last_host.is_empty() {
                 "<unknown>".to_string()
             } else {
-                account.last_host.clone()
+                human::sanitize_terminal(&account.last_host)
             },
             account.files.to_string(),
             human::format_bytes(account.bytes),
@@ -199,7 +199,7 @@ pub fn report(config_path: &Path, args: ReportArgs) -> Result<Outcome> {
             lines.push("rejections by reason:".to_string());
             let reason_rows: Vec<Vec<String>> = totals
                 .iter()
-                .map(|(reason, count)| vec![reason.clone(), count.to_string()])
+                .map(|(reason, count)| vec![human::sanitize_terminal(reason), count.to_string()])
                 .collect();
             lines.extend(format_rows(&reason_rows));
         }
@@ -235,12 +235,12 @@ fn report_tail(
     for record in shown {
         rows.push(vec![
             record.ts.clone(),
-            record.user.clone(),
+            human::sanitize_terminal(&record.user),
             record.ip.clone(),
-            record.method.clone(),
-            record.path.clone(),
+            human::sanitize_terminal(&record.method),
+            human::sanitize_terminal(&record.path),
             record.status.to_string(),
-            record.reason.clone().unwrap_or_default(),
+            human::sanitize_terminal(record.reason.as_deref().unwrap_or_default()),
         ]);
     }
     Ok(Outcome::text(format_rows(&rows)).with_data(&serde_json::json!({ "records": shown })))

@@ -70,6 +70,9 @@ assert_out_empty() {
 assert_err_empty() {
     if [ ! -s "$err" ]; then pass "$1"; else fail_msg "$1: stderr is not empty"; fi
 }
+assert_dir_gone() { # <desc> <path>
+    if [ -d "$2" ]; then fail_msg "$1: $2 still exists"; else pass "$1"; fi
+}
 assert_json_ok() {
     if grep -Fq '"status": "ok"' "$out" && [ ! -s "$err" ]; then
         pass "$1"
@@ -365,6 +368,7 @@ assert_rc "account remove rejects an unknown account" 1
 run "$binary" account remove e2e --yes --config "$conf"
 assert_rc "account remove --yes exits 0" 0
 assert_err_has "account remove clears the arm window" "arm window was cleared"
+assert_dir_gone "account remove drops the staged credential" "$state/client-ready/e2e"
 run "$binary" status --arm --config "$conf"
 assert_out_has "status --arm is empty after removal" "armed: none"
 run "$binary" account list --config "$conf"
@@ -495,9 +499,11 @@ assert_rc "report --tail conflicts with --reasons" 2
 run "$binary" audit --config "$conf"
 assert_rc "audit exits 0" 0
 assert_out_has "audit lists the configuration artifact" "config"
+# An orphaned client-ready folder (left by an older version, or by hand) is
+# still a real leftover that clean removes.
+mkdir -p "$state/client-ready/orphan"
 run "$binary" clean --config "$conf"
 assert_rc "clean without --yes needs a terminal when there is work" 2
-# The orphaned client-ready folder for the removed account is a real leftover.
 printf 'stale\n' >"$conf.shares"
 run "$binary" clean --dry-run --config "$conf"
 assert_rc "clean --dry-run exits 0" 0
