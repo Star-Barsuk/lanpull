@@ -16,9 +16,10 @@ set -eu
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 
-printf 'pre-push: fmt-check, clippy, cargo-deny, ruff, secrets, docs-check\n' >&2
+printf 'pre-push: fmt-check, clippy, cargo-deny, ruff, scripts, secrets, docs-check\n' >&2
 make -C server fmt-check lint deny
 make -C client lint
+make check-scripts
 make secrets
 make docs-check
 printf 'pre-push: ok\n' >&2

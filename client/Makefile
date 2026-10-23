@@ -18,7 +18,7 @@ MYPY       := $(BIN)/mypy
 PYTEST     := $(BIN)/pytest
 PIP_AUDIT  := $(BIN)/pip-audit
 
-.PHONY: help setup check-tools lint typecheck test audit clean ci
+.PHONY: help setup check-tools lint typecheck test coverage audit clean ci
 
 help: ## Show available targets
 	@awk 'BEGIN { FS = " ## " } /^[a-zA-Z0-9_-]+:.*## / { split($$1, t, ":"); printf "  %-16s %s\n", t[1], $$2 }' $(MAKEFILE_LIST)
@@ -45,6 +45,9 @@ typecheck: $(STAMP) ## Static type-check the client
 
 test: $(STAMP) ## Run the client tests
 	$(PYTEST)
+
+coverage: $(STAMP) ## Run the client tests with coverage (not a gate)
+	$(PYTEST) --cov=pull --cov-report=term-missing
 
 audit: $(STAMP) ## Audit the development tools for known vulnerabilities
 	$(PIP_AUDIT) -r requirements-dev.txt

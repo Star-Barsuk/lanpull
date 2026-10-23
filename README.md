@@ -287,6 +287,8 @@ make ci-full         # the gate: secrets, docs check, both sides, loopback e2e
 make -C server e2e   # loopback end-to-end round of the real server and pull.py
 make secrets         # tracked-file secret scan (gitleaks or fallback)
 make docs-check      # links, the public/private boundary, the client version
+make check-scripts   # repository shell scripts (sh -n and shellcheck)
+make coverage        # coverage report (advisory; make client-coverage too)
 make hooks           # install the optional pre-push net
 ```
 
