@@ -132,6 +132,67 @@ pub struct DisarmArgs {
     pub yes: bool,
 }
 
+/// `account add` payload.
+#[derive(Debug, Serialize)]
+struct AccountAdded {
+    account: String,
+    staging: PathBuf,
+    dry_run: bool,
+}
+
+/// `account remove` payload.
+#[derive(Debug, Serialize)]
+struct AccountRemoved {
+    account: String,
+    dry_run: bool,
+}
+
+/// `account passwd` payload (never carries the password).
+#[derive(Debug, Serialize)]
+struct AccountPasswd {
+    account: String,
+    staged: bool,
+}
+
+/// `account export` payload.
+#[derive(Debug, Serialize)]
+struct AccountExport {
+    account: String,
+    destination: PathBuf,
+    dry_run: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cross_device: Option<bool>,
+}
+
+/// One armed account in the `account arm` payload.
+#[derive(Debug, Serialize)]
+struct ArmEntry {
+    account: String,
+    expires_at: String,
+    remaining_secs: i64,
+}
+
+/// `account arm` payload.
+#[derive(Debug, Serialize)]
+struct ArmResult {
+    accounts: Vec<ArmEntry>,
+    ttl: String,
+}
+
+/// One account in the `account disarm` payload.
+#[derive(Debug, Serialize)]
+struct DisarmEntry {
+    account: String,
+    was_armed: bool,
+}
+
+/// `account disarm` payload.
+#[derive(Debug, Serialize)]
+struct DisarmResult {
+    accounts: Vec<DisarmEntry>,
+    all: bool,
+}
+
 /// One row of `account list` output.
 #[derive(Debug, Serialize)]
 struct AccountRow {
@@ -167,11 +228,11 @@ fn add(config_path: &Path, args: AddArgs) -> Result<Outcome> {
                 args.name,
                 staged.display()
             ))
-            .with_data(&serde_json::json!({
-                "account": args.name,
-                "staging": staged,
-                "dry_run": true,
-            })));
+            .with_data(&AccountAdded {
+                account: args.name,
+                staging: staged,
+                dry_run: true,
+            }));
     }
     let created =
         lanpull_core::account::create(&config, &args.name, args.ip, &args.output, args.local)?;
@@ -181,11 +242,11 @@ fn add(config_path: &Path, args: AddArgs) -> Result<Outcome> {
         created.staging.display()
     ));
     report_regeneration(&config, &mut outcome)?;
-    outcome.data = serde_json::json!({
-        "account": args.name,
-        "staging": created.staging,
-        "dry_run": false,
-    });
+    outcome.set_data(&AccountAdded {
+        account: args.name,
+        staging: created.staging,
+        dry_run: false,
+    })?;
     Ok(outcome)
 }
 
@@ -199,7 +260,10 @@ fn remove(config_path: &Path, name: &str, yes: bool, dry_run: bool) -> Result<Ou
     if dry_run {
         return Ok(Outcome::new()
             .line(format!("would remove account {name}"))
-            .with_data(&serde_json::json!({ "account": name, "dry_run": true })));
+            .with_data(&AccountRemoved {
+                account: name.to_string(),
+                dry_run: true,
+            }));
     }
     crate::confirm::require(yes, &format!("remove account {name}"))?;
     accounts.remove(name);
@@ -229,7 +293,10 @@ fn remove(config_path: &Path, name: &str, yes: bool, dry_run: bool) -> Result<Ou
         outcome = outcome.warn(format!("{name} was armed; its arm window was cleared"));
     }
     report_regeneration(&config, &mut outcome)?;
-    outcome.data = serde_json::json!({ "account": name, "dry_run": false });
+    outcome.set_data(&AccountRemoved {
+        account: name.to_string(),
+        dry_run: false,
+    })?;
     Ok(outcome)
 }
 
@@ -313,10 +380,10 @@ fn passwd(config_path: &Path, name: &str, output: Option<&Path>) -> Result<Outco
             "no staged folder for {name}; pass --output <dir> to rebuild it"
         ));
     }
-    outcome.data = serde_json::json!({
-        "account": name,
-        "staged": staged_present,
-    });
+    outcome.set_data(&AccountPasswd {
+        account: name.to_string(),
+        staged: staged_present,
+    })?;
     Ok(outcome)
 }
 
@@ -339,11 +406,12 @@ fn export(config_path: &Path, args: ExportArgs) -> Result<Outcome> {
                 args.name,
                 target.display()
             ))
-            .with_data(&serde_json::json!({
-                "account": args.name,
-                "destination": target,
-                "dry_run": true,
-            })));
+            .with_data(&AccountExport {
+                account: args.name,
+                destination: target,
+                dry_run: true,
+                cross_device: None,
+            }));
     }
     let exported =
         lanpull_core::account::export(&config, &args.name, &args.to, args.r#move, args.force)?;
@@ -357,12 +425,12 @@ fn export(config_path: &Path, args: ExportArgs) -> Result<Outcome> {
             "destination is on another filesystem; auth and server.crt are now on that device",
         );
     }
-    outcome.data = serde_json::json!({
-        "account": args.name,
-        "destination": exported.destination,
-        "cross_device": exported.cross_device,
-        "dry_run": false,
-    });
+    outcome.set_data(&AccountExport {
+        account: args.name,
+        destination: exported.destination,
+        dry_run: false,
+        cross_device: Some(exported.cross_device),
+    })?;
     Ok(outcome)
 }
 
@@ -395,7 +463,7 @@ fn arm(config_path: &Path, args: ArmArgs) -> Result<Outcome> {
 
     let mut state = ArmState::load(&config.arm_path())?;
     let mut outcome = Outcome::new();
-    let mut data = Vec::new();
+    let mut data: Vec<ArmEntry> = Vec::new();
     for name in &targets {
         if accounts.get(name).is_some_and(|account| account.local) {
             outcome = outcome.warn(format!("local account {name} needs no arming; skipped"));
@@ -406,14 +474,17 @@ fn arm(config_path: &Path, args: ArmArgs) -> Result<Outcome> {
             "armed {name} for {}",
             status::format_duration(seconds)
         ));
-        data.push(serde_json::json!({
-            "account": name,
-            "expires_at": timeutil::iso8601(expires),
-            "remaining_secs": seconds,
-        }));
+        data.push(ArmEntry {
+            account: name.clone(),
+            expires_at: timeutil::iso8601(expires),
+            remaining_secs: seconds,
+        });
     }
     state.save(&config.arm_path())?;
-    outcome.data = serde_json::json!({ "accounts": data, "ttl": args.ttl });
+    outcome.set_data(&ArmResult {
+        accounts: data,
+        ttl: args.ttl,
+    })?;
     Ok(outcome)
 }
 
@@ -427,7 +498,10 @@ fn disarm(config_path: &Path, args: DisarmArgs) -> Result<Outcome> {
         if state.armed.is_empty() {
             return Ok(Outcome::new()
                 .line("no accounts were armed")
-                .with_data(&serde_json::json!({ "accounts": [], "all": true })));
+                .with_data(&DisarmResult {
+                    accounts: Vec::new(),
+                    all: true,
+                }));
         }
         crate::confirm::require(args.yes, "disarm all accounts")?;
         let names: Vec<String> = state.armed.keys().cloned().collect();
@@ -439,11 +513,17 @@ fn disarm(config_path: &Path, args: DisarmArgs) -> Result<Outcome> {
         for name in &names {
             outcome = outcome.line(format!("disarmed {name}"));
         }
-        let data: Vec<serde_json::Value> = names
+        let data: Vec<DisarmEntry> = names
             .iter()
-            .map(|name| serde_json::json!({ "account": name, "was_armed": true }))
+            .map(|name| DisarmEntry {
+                account: name.clone(),
+                was_armed: true,
+            })
             .collect();
-        outcome.data = serde_json::json!({ "accounts": data, "all": true });
+        outcome.set_data(&DisarmResult {
+            accounts: data,
+            all: true,
+        })?;
         return Ok(outcome);
     }
 
@@ -455,7 +535,7 @@ fn disarm(config_path: &Path, args: DisarmArgs) -> Result<Outcome> {
     ensure_known(&accounts, &args.names)?;
 
     let mut outcome = Outcome::new();
-    let mut data = Vec::new();
+    let mut data: Vec<DisarmEntry> = Vec::new();
     let mut changed = false;
     for name in &args.names {
         let was_armed = state.disarm(name);
@@ -466,12 +546,18 @@ fn disarm(config_path: &Path, args: DisarmArgs) -> Result<Outcome> {
             format!("{name} was not armed")
         };
         outcome = outcome.line(line);
-        data.push(serde_json::json!({ "account": name, "was_armed": was_armed }));
+        data.push(DisarmEntry {
+            account: name.clone(),
+            was_armed,
+        });
     }
     if changed {
         state.save(&config.arm_path())?;
     }
-    outcome.data = serde_json::json!({ "accounts": data, "all": false });
+    outcome.set_data(&DisarmResult {
+        accounts: data,
+        all: false,
+    })?;
     Ok(outcome)
 }
 
@@ -491,5 +577,72 @@ fn ensure_known(accounts: &Clients, names: &[String]) -> Result<()> {
             "no such account(s): {}",
             unknown.join(", ")
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Tests may unwrap and use bare asserts for brevity; production code may not.
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::missing_assert_message
+    )]
+
+    use super::*;
+
+    #[test]
+    fn arm_disarm_and_export_payloads_keep_their_shape() {
+        let arm = ArmResult {
+            accounts: vec![ArmEntry {
+                account: "alpha".to_string(),
+                expires_at: "2026-10-24T00:00:00Z".to_string(),
+                remaining_secs: 900,
+            }],
+            ttl: "15m".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(&arm).unwrap(),
+            serde_json::json!({
+                "accounts": [{
+                    "account": "alpha",
+                    "expires_at": "2026-10-24T00:00:00Z",
+                    "remaining_secs": 900
+                }],
+                "ttl": "15m"
+            })
+        );
+
+        let disarm = DisarmResult {
+            accounts: vec![DisarmEntry {
+                account: "alpha".to_string(),
+                was_armed: true,
+            }],
+            all: false,
+        };
+        assert_eq!(
+            serde_json::to_value(&disarm).unwrap(),
+            serde_json::json!({
+                "accounts": [{ "account": "alpha", "was_armed": true }],
+                "all": false
+            })
+        );
+
+        let export = AccountExport {
+            account: "alpha".to_string(),
+            destination: PathBuf::from("/tmp/mirror"),
+            dry_run: false,
+            cross_device: Some(true),
+        };
+        assert_eq!(
+            serde_json::to_value(&export).unwrap(),
+            serde_json::json!({
+                "account": "alpha",
+                "destination": "/tmp/mirror",
+                "dry_run": false,
+                "cross_device": true
+            })
+        );
     }
 }

@@ -38,8 +38,17 @@ impl Outcome {
 
     /// Attach a structured payload.
     pub fn with_data<T: Serialize>(mut self, data: &T) -> Self {
-        self.data = serde_json::to_value(data).unwrap_or(serde_json::Value::Null);
+        self.data = serde_json::to_value(data).unwrap_or_else(|error| {
+            tracing::error!(%error, "cannot serialize the command payload");
+            serde_json::Value::Null
+        });
         self
+    }
+
+    /// Replace the structured payload with a typed value.
+    pub fn set_data<T: Serialize>(&mut self, data: &T) -> Result<()> {
+        self.data = serde_json::to_value(data)?;
+        Ok(())
     }
 
     /// Append one text line.
@@ -55,6 +64,25 @@ impl Outcome {
     }
 }
 
+/// The success envelope written by `--json`.
+#[derive(Debug, Serialize)]
+struct OkEnvelope<'a> {
+    status: &'a str,
+    command: &'a str,
+    data: &'a serde_json::Value,
+    warnings: &'a [String],
+}
+
+/// The failure envelope written by `--json`.
+#[derive(Debug, Serialize)]
+struct ErrorEnvelope<'a> {
+    status: &'a str,
+    command: &'a str,
+    code: u8,
+    message: String,
+    hint: Option<&'static str>,
+}
+
 /// Render a successful outcome to `(stdout, stderr)`.
 ///
 /// Text mode puts the lines on stdout and the `warning: ` diagnostics on
@@ -62,12 +90,12 @@ impl Outcome {
 /// stderr.
 pub fn render_ok(command: &str, outcome: &Outcome, json: bool) -> Result<(String, String)> {
     if json {
-        let envelope = serde_json::json!({
-            "status": "ok",
-            "command": command,
-            "data": outcome.data,
-            "warnings": outcome.warnings,
-        });
+        let envelope = OkEnvelope {
+            status: "ok",
+            command,
+            data: &outcome.data,
+            warnings: &outcome.warnings,
+        };
         let text = serde_json::to_string_pretty(&envelope).map_err(Error::Json)?;
         return Ok((format!("{text}\n"), String::new()));
     }
@@ -91,13 +119,13 @@ pub fn render_ok(command: &str, outcome: &Outcome, json: bool) -> Result<(String
 /// when available, `hint: ` on stderr. Stdout is empty in text mode.
 pub fn render_error(command: &str, error: &Error, json: bool) -> (String, String) {
     if json {
-        let envelope = serde_json::json!({
-            "status": "error",
-            "command": command,
-            "code": error.exit_code(),
-            "message": error.to_string(),
-            "hint": error.hint(),
-        });
+        let envelope = ErrorEnvelope {
+            status: "error",
+            command,
+            code: error.exit_code(),
+            message: error.to_string(),
+            hint: error.hint(),
+        };
         return serde_json::to_string_pretty(&envelope).map_or_else(
             |_| (String::new(), format!("error: {error}\n")),
             |text| (format!("{text}\n"), String::new()),

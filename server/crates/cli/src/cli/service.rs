@@ -5,8 +5,22 @@ use std::process::Command;
 use clap::Subcommand;
 use lanpull_core::error::{Error, Result};
 use lanpull_core::timeutil;
+use serde::Serialize;
 
 use crate::cli::Outcome;
+
+/// `service start|stop|restart` payload.
+#[derive(Debug, Serialize)]
+struct ServiceAction {
+    service: &'static str,
+    action: String,
+}
+
+/// `service status|logs` payload.
+#[derive(Debug, Serialize)]
+struct ServiceInfo {
+    service: &'static str,
+}
 
 /// The systemd unit name.
 const SERVICE: &str = "lanpull.service";
@@ -121,7 +135,10 @@ fn control(verb: &str, past: &str) -> Result<Outcome> {
     }
     Ok(Outcome::new()
         .line(format!("service {SERVICE} {past}"))
-        .with_data(&serde_json::json!({ "service": SERVICE, "action": verb })))
+        .with_data(&ServiceAction {
+            service: SERVICE,
+            action: verb.to_string(),
+        }))
 }
 
 /// Run a read-only systemctl verb, forwarding its output to the terminal.
@@ -141,7 +158,7 @@ fn stream(args: &[String]) -> Result<Outcome> {
         // useful result, not a failure.
         tracing::debug!("systemctl {} exited with {status}", args.join(" "));
     }
-    Ok(Outcome::new().with_data(&serde_json::json!({ "service": SERVICE })))
+    Ok(Outcome::new().with_data(&ServiceInfo { service: SERVICE }))
 }
 
 #[cfg(test)]

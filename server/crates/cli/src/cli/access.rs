@@ -201,6 +201,26 @@ fn ensure_share(config: &Config, share: &str) -> Result<()> {
     }
 }
 
+/// `access ... add/remove` payload.
+#[derive(Debug, Serialize)]
+struct RuleMutation {
+    rules: Vec<String>,
+    dry_run: bool,
+}
+
+/// `access import` payload.
+#[derive(Debug, Serialize)]
+struct RuleImport {
+    imported: usize,
+    dry_run: bool,
+}
+
+/// `access doctor` payload.
+#[derive(Debug, Serialize)]
+struct AccessDoctor {
+    warnings: Vec<String>,
+}
+
 /// The text/data result of a rule mutation.
 fn rule_outcome(base: &str, past: &str, rules: &[String], dry_run: bool) -> Outcome {
     let summary = if dry_run {
@@ -208,9 +228,10 @@ fn rule_outcome(base: &str, past: &str, rules: &[String], dry_run: bool) -> Outc
     } else {
         format!("{past} {}", rules.join(", "))
     };
-    Outcome::new()
-        .line(summary)
-        .with_data(&serde_json::json!({ "rules": rules, "dry_run": dry_run }))
+    Outcome::new().line(summary).with_data(&RuleMutation {
+        rules: rules.to_vec(),
+        dry_run,
+    })
 }
 
 /// Add rules to the public set.
@@ -472,7 +493,7 @@ fn import(config_path: &Path, from: &Path, dry_run: bool) -> Result<Outcome> {
         }
         imported = imported.saturating_add(1);
     }
-    let data = serde_json::json!({ "imported": imported, "dry_run": dry_run });
+    let data = RuleImport { imported, dry_run };
     if dry_run {
         return Ok(Outcome::new()
             .line(format!("would import {imported} rules"))
@@ -481,7 +502,7 @@ fn import(config_path: &Path, from: &Path, dry_run: bool) -> Result<Outcome> {
     policy.save(&config.access_path)?;
     let mut outcome = Outcome::new().line(format!("imported {imported} rules"));
     report_regeneration(&config, &mut outcome)?;
-    outcome.data = data;
+    outcome.set_data(&data)?;
     Ok(outcome)
 }
 
@@ -535,7 +556,9 @@ fn doctor(config_path: &Path) -> Result<Outcome> {
         format!("{} warning(s)", warnings.len())
     };
     let mut outcome = Outcome::new().line(summary);
-    outcome.data = serde_json::json!({ "warnings": &warnings });
+    outcome.set_data(&AccessDoctor {
+        warnings: warnings.clone(),
+    })?;
     outcome.warnings = warnings;
     Ok(outcome)
 }

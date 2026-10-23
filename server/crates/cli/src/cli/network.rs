@@ -176,12 +176,49 @@ fn add(config_path: &Path, args: &AddArgs) -> Result<Outcome> {
     Ok(Outcome::text(lines).with_data(&network))
 }
 
+/// `network list` payload.
+#[derive(Debug, Serialize)]
+struct NetworkList {
+    networks: Vec<NetworkRow>,
+}
+
+/// `network show` payload.
+#[derive(Debug, Serialize)]
+struct NetworkShown {
+    name: String,
+    ip: String,
+    cert_path: PathBuf,
+    key_path: PathBuf,
+    active: bool,
+}
+
+/// `network use` payload.
+#[derive(Debug, Serialize)]
+struct NetworkUsed {
+    name: String,
+    ip: String,
+    cert_path: PathBuf,
+    key_path: PathBuf,
+    dry_run: bool,
+    restart: bool,
+}
+
+/// `network remove` payload.
+#[derive(Debug, Serialize)]
+struct NetworkRemoved {
+    name: String,
+    deleted_cert: bool,
+}
+
 /// List the registered profiles, marking the active one.
 fn list(config_path: &Path) -> Result<Outcome> {
     let (config, networks) = load(config_path)?;
     if networks.is_empty() {
-        return Ok(Outcome::text(vec!["no networks configured".to_string()])
-            .with_data(&serde_json::json!({ "networks": [] })));
+        return Ok(
+            Outcome::text(vec!["no networks configured".to_string()]).with_data(&NetworkList {
+                networks: Vec::new(),
+            }),
+        );
     }
     let rows: Vec<NetworkRow> = networks
         .iter()
@@ -223,7 +260,7 @@ fn list(config_path: &Path) -> Result<Outcome> {
             row.key_path.clone(),
         ]);
     }
-    Ok(Outcome::text(format_rows(&table)).with_data(&serde_json::json!({ "networks": rows })))
+    Ok(Outcome::text(format_rows(&table)).with_data(&NetworkList { networks: rows }))
 }
 
 /// Show one profile, or the active profile when no name is given.
@@ -246,13 +283,13 @@ fn show(config_path: &Path, name: Option<&str>) -> Result<Outcome> {
         format!("key_path:  {}", network.key_path.display()),
         format!("active:    {active}"),
     ];
-    Ok(Outcome::text(lines).with_data(&serde_json::json!({
-        "name": network.name,
-        "ip": network.ip.to_string(),
-        "cert_path": network.cert_path,
-        "key_path": network.key_path,
-        "active": active,
-    })))
+    Ok(Outcome::text(lines).with_data(&NetworkShown {
+        name: network.name.clone(),
+        ip: network.ip.to_string(),
+        cert_path: network.cert_path.clone(),
+        key_path: network.key_path.clone(),
+        active,
+    }))
 }
 
 /// Apply a profile to the configuration and ensure its certificate exists.
@@ -333,14 +370,14 @@ fn use_profile(config_path: &Path, args: &UseArgs) -> Result<Outcome> {
         lines.extend(restart.lines);
     }
 
-    let mut outcome = Outcome::text(lines).with_data(&serde_json::json!({
-        "name": network.name,
-        "ip": network.ip.to_string(),
-        "cert_path": network.cert_path,
-        "key_path": network.key_path,
-        "dry_run": args.dry_run,
-        "restart": args.restart,
-    }));
+    let mut outcome = Outcome::text(lines).with_data(&NetworkUsed {
+        name: network.name,
+        ip: network.ip.to_string(),
+        cert_path: network.cert_path,
+        key_path: network.key_path,
+        dry_run: args.dry_run,
+        restart: args.restart,
+    });
     for warning in warnings {
         outcome = outcome.warn(warning);
     }
@@ -370,10 +407,10 @@ fn remove(config_path: &Path, args: &RemoveArgs) -> Result<Outcome> {
         remove_if_present(&network.cert_path, &mut lines);
         remove_if_present(&network.key_path, &mut lines);
     }
-    Ok(Outcome::text(lines).with_data(&serde_json::json!({
-        "name": network.name,
-        "deleted_cert": args.delete_cert,
-    })))
+    Ok(Outcome::text(lines).with_data(&NetworkRemoved {
+        name: network.name.clone(),
+        deleted_cert: args.delete_cert,
+    }))
 }
 
 /// The result of ensuring a profile's certificate.

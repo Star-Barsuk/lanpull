@@ -149,6 +149,13 @@ fn resolve_init_path(explicit: Option<PathBuf>) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(core_config::DEFAULT_CONFIG_PATH))
 }
 
+/// `cert` payload.
+#[derive(Debug, serde::Serialize)]
+struct CertData {
+    cert_path: PathBuf,
+    key_path: PathBuf,
+}
+
 /// Generate the TLS certificate.
 fn cert(config_path: &std::path::Path, force: bool) -> Result<cli::Outcome> {
     let config = lanpull_core::config::Config::load(config_path)?;
@@ -164,8 +171,8 @@ fn cert(config_path: &std::path::Path, force: bool) -> Result<cli::Outcome> {
         .line(format!("certificate written to {}", cert_path.display()))
         .line(format!("key written to {} (mode 600)", key_path.display()))
         .line("copy server.crt to every client")
-        .with_data(&serde_json::json!({
-            "cert_path": cert_path,
-            "key_path": key_path,
-        })))
+        .with_data(&CertData {
+            cert_path,
+            key_path,
+        }))
 }

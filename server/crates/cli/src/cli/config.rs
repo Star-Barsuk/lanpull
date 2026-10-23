@@ -1,6 +1,6 @@
 //! `lanpull config` — read or change the configuration.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
 use lanpull_core::config::Config;
@@ -62,6 +62,27 @@ struct ConfigView {
     audit_log: String,
 }
 
+/// `config path` payload.
+#[derive(Debug, Serialize)]
+struct ConfigPath {
+    path: PathBuf,
+}
+
+/// `config get` payload.
+#[derive(Debug, Serialize)]
+struct ConfigValue {
+    key: String,
+    value: String,
+}
+
+/// `config set` payload.
+#[derive(Debug, Serialize)]
+struct ConfigSet {
+    key: String,
+    value: String,
+    dry_run: bool,
+}
+
 /// Dispatch a configuration operation.
 pub fn run(config_path: &Path, command: ConfigCommand) -> Result<Outcome> {
     match command {
@@ -74,7 +95,9 @@ pub fn run(config_path: &Path, command: ConfigCommand) -> Result<Outcome> {
         } => set(config_path, &key, &value, dry_run),
         ConfigCommand::Path => Ok(Outcome::new()
             .line(config_path.display().to_string())
-            .with_data(&serde_json::json!({ "path": config_path }))),
+            .with_data(&ConfigPath {
+                path: config_path.to_path_buf(),
+            })),
     }
 }
 
@@ -141,9 +164,10 @@ fn get(config_path: &Path, key: &str) -> Result<Outcome> {
         crate::config_edit::get(config_path, key)?
             .ok_or_else(|| Error::Config(format!("unknown key: {key}")))?
     };
-    Ok(Outcome::new()
-        .line(value.clone())
-        .with_data(&serde_json::json!({ "key": key, "value": value })))
+    Ok(Outcome::new().line(value.clone()).with_data(&ConfigValue {
+        key: key.to_string(),
+        value,
+    }))
 }
 
 /// Set one configuration value.
@@ -165,9 +189,11 @@ fn set(config_path: &Path, key: &str, value: &str, dry_run: bool) -> Result<Outc
         crate::config_edit::set(config_path, key, value)?;
         format!("set {key}={value}")
     };
-    Ok(Outcome::new()
-        .line(summary)
-        .with_data(&serde_json::json!({ "key": key, "value": value, "dry_run": dry_run })))
+    Ok(Outcome::new().line(summary).with_data(&ConfigSet {
+        key: key.to_string(),
+        value: value.to_string(),
+        dry_run,
+    }))
 }
 
 /// The keys accepted by `config get`/`config set` and resolved by the loader.

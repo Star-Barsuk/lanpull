@@ -127,6 +127,25 @@ pub fn run(config_path: &Path, args: &InitArgs) -> Result<Outcome> {
     ))
 }
 
+/// One share in the `init` payload.
+#[derive(Debug, serde::Serialize)]
+struct ShareSpec {
+    name: String,
+    dir: PathBuf,
+}
+
+/// `init` payload.
+#[derive(Debug, serde::Serialize)]
+struct InitData {
+    path: PathBuf,
+    state_dir: PathBuf,
+    bind: String,
+    port: u16,
+    server_ip: String,
+    shares: Vec<ShareSpec>,
+    dry_run: bool,
+}
+
 /// Build the `init` result, whether it wrote anything or only described it.
 fn describe(
     config_path: &Path,
@@ -151,18 +170,21 @@ fn describe(
         .line(format!("  PORT={port}"))
         .line(format!("  SERVER_IP={server_ip}"))
         .line("next: lanpull cert, then lanpull access and lanpull account add");
-    let shares_json: Vec<serde_json::Value> = shares
+    let shares_json: Vec<ShareSpec> = shares
         .iter()
-        .map(|(name, dir)| serde_json::json!({ "name": name, "dir": dir }))
+        .map(|(name, dir)| ShareSpec {
+            name: name.clone(),
+            dir: dir.clone(),
+        })
         .collect();
-    outcome.data = serde_json::json!({
-        "path": config_path,
-        "state_dir": state_dir,
-        "bind": bind,
-        "port": port,
-        "server_ip": server_ip.to_string(),
-        "shares": shares_json,
-        "dry_run": dry_run,
+    let _ = outcome.set_data(&InitData {
+        path: config_path.to_path_buf(),
+        state_dir: state_dir.to_path_buf(),
+        bind: bind.to_string(),
+        port,
+        server_ip: server_ip.to_string(),
+        shares: shares_json,
+        dry_run,
     });
     outcome
 }
@@ -402,5 +424,46 @@ mod tests {
         assert!(!is_lan_address(IpAddr::V6(Ipv6Addr::new(
             0x2001, 0xdb8, 0, 0, 0, 0, 0, 1
         ))));
+    }
+}
+
+#[cfg(test)]
+mod payload_tests {
+    // Tests may unwrap and use bare asserts for brevity; production code may not.
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::missing_assert_message
+    )]
+
+    use super::*;
+
+    #[test]
+    fn init_payload_keeps_its_shape() {
+        let data = InitData {
+            path: PathBuf::from("/etc/lanpull/lanpull.conf"),
+            state_dir: PathBuf::from("/var/lib/lanpull"),
+            bind: "0.0.0.0".to_string(),
+            port: 8000,
+            server_ip: "192.168.0.10".to_string(),
+            shares: vec![ShareSpec {
+                name: "reports".to_string(),
+                dir: PathBuf::from("/srv/reports"),
+            }],
+            dry_run: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&data).unwrap(),
+            serde_json::json!({
+                "path": "/etc/lanpull/lanpull.conf",
+                "state_dir": "/var/lib/lanpull",
+                "bind": "0.0.0.0",
+                "port": 8000,
+                "server_ip": "192.168.0.10",
+                "shares": [{ "name": "reports", "dir": "/srv/reports" }],
+                "dry_run": true
+            })
+        );
     }
 }

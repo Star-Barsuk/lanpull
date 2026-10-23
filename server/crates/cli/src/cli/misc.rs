@@ -54,6 +54,41 @@ pub struct CleanArgs {
     pub yes: bool,
 }
 
+/// `status` payload.
+#[derive(Debug, Serialize)]
+struct StatusData {
+    manifests: Vec<String>,
+    armed: Vec<status::ArmedAccount>,
+}
+
+/// One armed account in `status --arm`.
+#[derive(Debug, Serialize)]
+struct ArmedView {
+    account: String,
+    expires_at: String,
+    remaining_secs: i64,
+}
+
+/// `status --arm` payload.
+#[derive(Debug, Serialize)]
+struct ArmScope {
+    scope: &'static str,
+    arm: Vec<ArmedView>,
+}
+
+/// `report --tail` payload.
+#[derive(Debug, Serialize)]
+struct Records {
+    records: Vec<audit::Record>,
+}
+
+/// `clean` payload.
+#[derive(Debug, Serialize)]
+struct CleanResult {
+    removed: Vec<std::path::PathBuf>,
+    dry_run: bool,
+}
+
 /// Show operator status.
 pub fn status(config_path: &Path, args: StatusArgs) -> Result<Outcome> {
     let config = Config::load(config_path)?;
@@ -72,7 +107,10 @@ pub fn status(config_path: &Path, args: StatusArgs) -> Result<Outcome> {
     if lines.is_empty() {
         lines.push("status is clean".to_string());
     }
-    let data = serde_json::json!({ "manifests": report.manifests, "armed": report.armed });
+    let data = serde_json::to_value(&StatusData {
+        manifests: report.manifests,
+        armed: report.armed,
+    })?;
     let mut warnings = report.warnings;
     warnings.extend(config_warnings(config_path));
     Ok(Outcome {
@@ -111,13 +149,14 @@ fn status_arm(config: &Config) -> Result<Outcome> {
         .collect();
 
     if armed.is_empty() {
-        return Ok(Outcome::new().line("armed: none").with_data(
-            &serde_json::json!({ "scope": "arm", "arm": Vec::<serde_json::Value>::new() }),
-        ));
+        return Ok(Outcome::new().line("armed: none").with_data(&ArmScope {
+            scope: "arm",
+            arm: Vec::new(),
+        }));
     }
 
     let mut outcome = Outcome::new();
-    let mut data = Vec::new();
+    let mut data: Vec<ArmedView> = Vec::new();
     for (name, remaining) in &armed {
         let expires = now.saturating_add(*remaining);
         let at = timeutil::iso8601(expires);
@@ -125,13 +164,16 @@ fn status_arm(config: &Config) -> Result<Outcome> {
             "armed {name} {} left (until {at})",
             status::format_duration(*remaining)
         ));
-        data.push(serde_json::json!({
-            "account": name,
-            "expires_at": at,
-            "remaining_secs": remaining,
-        }));
+        data.push(ArmedView {
+            account: name.clone(),
+            expires_at: at,
+            remaining_secs: *remaining,
+        });
     }
-    outcome.data = serde_json::json!({ "scope": "arm", "arm": data });
+    outcome.set_data(&ArmScope {
+        scope: "arm",
+        arm: data,
+    })?;
     Ok(outcome)
 }
 
@@ -221,7 +263,9 @@ fn report_tail(
     if shown.is_empty() {
         return Ok(Outcome::new()
             .line("no requests recorded")
-            .with_data(&serde_json::json!({ "records": Vec::<audit::Record>::new() })));
+            .with_data(&Records {
+                records: Vec::new(),
+            }));
     }
     let mut rows = vec![vec![
         "TS".to_string(),
@@ -243,7 +287,9 @@ fn report_tail(
             human::sanitize_terminal(record.reason.as_deref().unwrap_or_default()),
         ]);
     }
-    Ok(Outcome::text(format_rows(&rows)).with_data(&serde_json::json!({ "records": shown })))
+    Ok(Outcome::text(format_rows(&rows)).with_data(&Records {
+        records: shown.to_vec(),
+    }))
 }
 
 /// One discovered artifact.
@@ -321,17 +367,20 @@ pub fn clean(config_path: &Path, args: CleanArgs) -> Result<Outcome> {
     if targets.is_empty() {
         return Ok(Outcome::new()
             .line("nothing to clean")
-            .with_data(&serde_json::json!({ "removed": [], "dry_run": args.dry_run })));
+            .with_data(&CleanResult {
+                removed: Vec::new(),
+                dry_run: args.dry_run,
+            }));
     }
     if args.dry_run {
         let lines: Vec<String> = targets
             .iter()
             .map(|path| format!("would remove {}", path.display()))
             .collect();
-        return Ok(Outcome::text(lines).with_data(&serde_json::json!({
-            "removed": targets,
-            "dry_run": true,
-        })));
+        return Ok(Outcome::text(lines).with_data(&CleanResult {
+            removed: targets,
+            dry_run: true,
+        }));
     }
     crate::confirm::require(
         args.yes,
@@ -348,8 +397,57 @@ pub fn clean(config_path: &Path, args: CleanArgs) -> Result<Outcome> {
         .iter()
         .map(|path| format!("removed {}", path.display()))
         .collect();
-    Ok(Outcome::text(lines).with_data(&serde_json::json!({
-        "removed": targets,
-        "dry_run": false,
-    })))
+    Ok(Outcome::text(lines).with_data(&CleanResult {
+        removed: targets,
+        dry_run: false,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    // Tests may unwrap and use bare asserts for brevity; production code may not.
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::missing_assert_message
+    )]
+
+    use super::*;
+
+    #[test]
+    fn status_and_clean_payloads_keep_their_shape() {
+        let status = StatusData {
+            manifests: vec!["manifest reports: 2 files".to_string()],
+            armed: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(&status).unwrap(),
+            serde_json::json!({
+                "manifests": ["manifest reports: 2 files"],
+                "armed": []
+            })
+        );
+
+        let empty = ArmScope {
+            scope: "arm",
+            arm: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(&empty).unwrap(),
+            serde_json::json!({ "scope": "arm", "arm": [] })
+        );
+
+        let clean = CleanResult {
+            removed: vec![std::path::PathBuf::from("/tmp/state.json")],
+            dry_run: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&clean).unwrap(),
+            serde_json::json!({
+                "removed": ["/tmp/state.json"],
+                "dry_run": true
+            })
+        );
+    }
 }

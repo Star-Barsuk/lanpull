@@ -41,6 +41,14 @@ impl ShareCommand {
     }
 }
 
+/// `share add` payload.
+#[derive(Debug, Serialize)]
+struct ShareAdded {
+    name: String,
+    dir: PathBuf,
+    dry_run: bool,
+}
+
 /// One share row.
 #[derive(Debug, Serialize)]
 struct ShareRow {
@@ -143,7 +151,9 @@ fn add(config_path: &Path, name: &str, dir: &Path, dry_run: bool) -> Result<Outc
         crate::init::ensure_share_ignore(dir)?;
         format!("added share {name}")
     };
-    Ok(Outcome::new()
-        .line(summary)
-        .with_data(&serde_json::json!({ "name": name, "dir": dir, "dry_run": dry_run })))
+    Ok(Outcome::new().line(summary).with_data(&ShareAdded {
+        name: name.to_string(),
+        dir: dir.to_path_buf(),
+        dry_run,
+    }))
 }
