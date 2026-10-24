@@ -59,6 +59,7 @@ UNINSTALL_CMD = $(SCRIPTS)/uninstall.sh --binary "$(LANPULL)" --unit "$(UNIT)" \
 
 .PHONY: help setup build install uninstall wipe \
         clean distclean confirm check-tools check-scripts check-core cli-test e2e dast client-bundle \
+        release-setup licenses licenses-check \
         fmt fmt-check lint doc test coverage bench fuzz machete deny audit audit-bin geiger security ci
 
 help: ## Show available targets
@@ -166,6 +167,27 @@ coverage: ## Report test coverage (cargo-llvm-cov; not a gate)
 
 FUZZ_TARGETS := config glob manifest relpath
 FUZZ_TIME    ?= 20
+
+release-setup: ## Install the release-only tools (cargo-about)
+	$(CARGO) install --locked --features cli cargo-about@0.9.2
+
+licenses: ## Regenerate THIRD_PARTY_LICENSES.md from Cargo.lock
+	@command -v cargo-about >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-about; run 'make -C server release-setup'" >&2; exit 1; \
+	}
+	$(CARGO) about generate --manifest-path Cargo.toml --config about.toml about.hbs \
+		-o ../THIRD_PARTY_LICENSES.md
+
+licenses-check: ## Fail when THIRD_PARTY_LICENSES.md is stale
+	@command -v cargo-about >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-about; run 'make -C server release-setup'" >&2; exit 1; \
+	}
+	@set -e; tmp=$$(mktemp); trap 'rm -f "$$tmp"' EXIT; \
+		$(CARGO) about generate --manifest-path Cargo.toml --config about.toml about.hbs -o "$$tmp"; \
+		cmp -s "$$tmp" ../THIRD_PARTY_LICENSES.md || { \
+			echo "lanpull: THIRD_PARTY_LICENSES.md is stale; run 'make -C server licenses'" >&2; \
+			exit 1; \
+		}
 
 fuzz: ## Run a short fuzz smoke over the parsers (nightly + cargo-fuzz; not a gate)
 	@command -v cargo-fuzz >/dev/null 2>&1 || { \
