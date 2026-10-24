@@ -81,6 +81,15 @@ run_root install -Dm644 "$tmp" "$unit_dest"
 rm -f "$tmp"
 trap - EXIT
 
+# The unit is generated from a template; verify the substituted result when
+# systemd's checker is available. A failure is a warning here because the
+# checker and the running systemd are not always the same version.
+if command -v systemd-analyze >/dev/null 2>&1; then
+    if ! systemd-analyze verify "$unit_dest" >/dev/null 2>&1; then
+        printf 'install: warning: systemd-analyze verify failed for %s\n' "$unit_dest" >&2
+    fi
+fi
+
 # 5. Give the operator ownership of the state directory, then reload systemd.
 run_root chown -R "$operator:$group" "$state_dir"
 run_root systemctl daemon-reload

@@ -29,16 +29,40 @@ release candidate.
   per run with a short retry on a dropped transfer.
 - Systemd unit, install/uninstall/wipe lifecycle, and a full teardown boundary.
 - Quality and security gates: `make ci-full` (secret scan, docs check, both
-  sides, loopback e2e), parser fuzzing, criterion baselines, and a local DAST
-  (`testssl.sh` plus HTTP probes).
+  sides, release-binary audit, loopback e2e), parser fuzzing, criterion
+  baselines, and a local DAST (`testssl.sh` plus HTTP probes).
 - Typed `--json` payloads and envelopes; a minimal `serve_tls` example that
   proves the transport is reusable.
 
 ### Changed
 
-- The client gate runs on Python 3.11 with a hash-locked tool set.
+- The client gate runs on Python 3.11 with a hash-locked tool set and now
+  checks that `requirements-dev.txt` matches `requirements-dev.in`;
+  `make client-format` formats the client.
 - The release profile keeps overflow checks, thin LTO, one codegen unit, and
   strips symbols; the binary is built for `x86_64-unknown-linux-musl`.
+- The pipeline is split into `make check`, `make test-all`, `make ci`, and
+  `make ci-full`; the CLI test uses the debug binary and the release-binary
+  audit belongs to the full gate. `cargo-geiger` is advisory, not blocking.
+- `make ci-full` requires gitleaks and shellcheck, so the full gate cannot be
+  silently weaker on a machine without them.
+- `make ci-full` checks the committed third-party notices; `cargo-deny` blocks
+  advisories, while the full `cargo audit` scan is a manual `security` step.
+- `make setup` records the installed gate-tool versions and skips the reinstall
+  when they still match; `make -C server msrv` checks the declared MSRV 1.88
+  when that toolchain is installed; `make doctor` prints the toolchain and
+  optional-tool status.
+- The archive ships the public docs and build metadata so its README links
+  resolve; `make release-check` rehearses the layout from a working tree.
+- Release and publication are guarded: `release.sh` checks the staged versions
+  and the static link and records `dist/COMMIT`; `publish.sh` requires an
+  existing tag at HEAD with the matching hash and never creates or pushes tags.
+- `docs-check` resolves links from the document directory, derives the public
+  file set from the git index, keeps generated trees out, and checks that
+  private documents and `tools/` are untracked.
+- The gate compiles benches and examples (`check-targets`), checks that
+  `cargo-audit` and `cargo-deny` ignore the same advisories, and runs negative
+  safety tests for the privileged scripts (`guard-test`).
 - The systemd unit drops all capabilities, uses a `@system-service` syscall
   allowlist, private devices, clock/log protection, and `UMask=0077`
   (`systemd-analyze security` exposure 1.7 OK).
@@ -62,7 +86,7 @@ release candidate.
 ### Security
 
 - TLS is pinned to a self-signed certificate; there is no unverified fallback.
-- `cargo-deny`, `cargo-audit`, `cargo audit bin`, `cargo-geiger`, `gitleaks`,
-  and `pip-audit` are part of the routine gates.
+- `cargo-deny`, `cargo-audit`, `cargo audit bin`, `gitleaks`, and `pip-audit`
+  are part of the routine gates; `cargo-geiger` is an advisory inventory.
 - The engineering standard, threat model, and decision log are maintained with
   the code; the public tree is checked for private references.

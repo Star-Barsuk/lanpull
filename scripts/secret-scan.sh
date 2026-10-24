@@ -22,7 +22,7 @@ report() {
 }
 
 if command -v gitleaks >/dev/null 2>&1; then
-    printf 'secret-scan: gitleaks\n'
+    printf 'secret-scan: gitleaks (working tree)\n'
     if ! (cd "$root" && gitleaks detect --no-banner --redact --no-git --source .); then
         printf 'secret-scan: gitleaks reported a candidate secret\n' >&2
         exit 1
@@ -30,7 +30,12 @@ if command -v gitleaks >/dev/null 2>&1; then
     exit 0
 fi
 
-printf 'secret-scan: gitleaks not installed; fallback mode (path and content check)\n'
+if [ "${REQUIRE_GITLEAKS:-0}" = "1" ]; then
+    printf 'secret-scan: gitleaks is required by the full gate; install it and re-run\n' >&2
+    exit 2
+fi
+
+printf 'secret-scan: gitleaks not installed; fallback mode (tracked paths and content)\n'
 
 tracked=$(cd "$root" && git ls-files)
 if [ -z "$tracked" ]; then
@@ -41,8 +46,8 @@ fi
 # Paths that must never be tracked. Committed examples are excluded: they are
 # documentation, not credentials.
 suspect_paths=$(printf '%s\n' "$tracked" | grep -E \
-    '(^|/)(auth|lanpull\.clients|lanpull\.access\.json|lanpull\.networks\.json|lanpull\.conf)$|\.(key|pem|p12|pfx)$|(^|/)id_(rsa|dsa|ecdsa|ed25519)$|(^|/)\.env(\.|$)' \
-    | grep -Ev '\.example$|^docs/' || true)
+    '(^|/)(auth|lanpull\.clients|lanpull\.access\.json|lanpull\.networks\.json|lanpull\.conf)$|\.(key|pem|p12|pfx|crt)$|(^|/)id_(rsa|dsa|ecdsa|ed25519)$|(^|/)\.env(\.|$)' \
+    | grep -Ev '\.example$' || true)
 if [ -n "$suspect_paths" ]; then
     while IFS= read -r path; do
         [ -n "$path" ] && report "tracked secret-like path: $path"
@@ -52,13 +57,16 @@ EOF
 fi
 
 # Content patterns. `git grep` exits 1 when nothing matches, which is the
-# expected clean case.
+# expected clean case; any other non-zero status is a scanner error, not a pass.
 if (cd "$root" && git grep -n -I -E \
     -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' \
     -e 'AKIA[0-9A-Z]{16}' \
     -e 'ghp_[A-Za-z0-9]{36}' \
     -- .) >&2; then
     report 'content pattern matched (see above)'
+else
+    rc=$?
+    [ "$rc" -eq 1 ] || report "git grep failed with status $rc"
 fi
 
 if [ "$found" -eq 0 ]; then

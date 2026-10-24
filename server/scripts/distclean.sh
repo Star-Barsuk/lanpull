@@ -15,6 +15,8 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 root=${1:-}
 [ -n "$root" ] || die "distclean: repository root is required"
 [ -d "$root" ] || die "distclean: not a directory: $root"
+root=$(CDPATH='' cd -- "$root" && pwd)
+require_safe_path "$root" REPO_ROOT
 
 find "$root" \
     -path "$root/.git" -prune -o \
@@ -24,3 +26,7 @@ find "$root" \
     -type f \( -name '.lanpull.lock' -o -name 'state.json' \
         -o -name '*.part' -o -name '.lanpull.partials.json' \) \
     -print -exec rm -f {} +
+
+# Release archives are generated output; `make wipe` promises to remove
+# everything lanpull created, so they go with the runtime leftovers.
+rm -rf "$root/dist"
