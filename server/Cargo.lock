@@ -871,7 +871,7 @@ dependencies = [
 
 [[package]]
 name = "lanpull-cli"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "clap",
  "lanpull-core",
@@ -886,7 +886,7 @@ dependencies = [
 
 [[package]]
 name = "lanpull-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "argon2",
  "criterion",
@@ -906,7 +906,7 @@ dependencies = [
 
 [[package]]
 name = "lanpull-http"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "axum",
  "axum-server",
@@ -926,7 +926,7 @@ dependencies = [
 
 [[package]]
 name = "lanpull-store"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "criterion",
  "lanpull-core",
