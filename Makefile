@@ -7,7 +7,7 @@
 
 SHELL := /bin/sh
 
-.PHONY: help setup ci ci-full secrets docs-check check-scripts release hooks hooks-uninstall
+.PHONY: help setup ci ci-full secrets docs-check check-scripts release publish publish-draft hooks hooks-uninstall
 
 help: ## Show available targets
 	@printf 'Server targets:\n'
@@ -21,6 +21,8 @@ help: ## Show available targets
 	@printf '  %-16s %s\n' docs-check "Check links, the public/private boundary, and the version"
 	@printf '  %-16s %s\n' check-scripts "Parse and lint the repository shell scripts"
 	@printf '  %-16s %s\n' release "Build the release archive (does not tag)"
+	@printf '  %-16s %s\n' publish "Publish the release to GitHub (needs gh auth)"
+	@printf '  %-16s %s\n' publish-draft "Publish the release as a draft for review"
 	@printf '  %-16s %s\n' hooks "Install the pre-push hook (fast gates and secret scan)"
 	@printf '  %-16s %s\n' hooks-uninstall "Remove the pre-push hook"
 	@printf '  %-16s %s\n' setup "Install both toolchains"
@@ -49,6 +51,12 @@ check-scripts: ## Parse and lint the repository shell scripts
 
 release: ## Build the release archive (does not tag)
 	@scripts/release.sh
+
+publish: ## Publish the release to GitHub (needs gh auth)
+	@scripts/publish.sh
+
+publish-draft: ## Publish the release as a draft for review
+	@scripts/publish.sh --draft
 
 hooks: ## Install the pre-push hook
 	@install -Dm755 scripts/git-hooks/pre-push .git/hooks/pre-push
