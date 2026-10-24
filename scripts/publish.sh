@@ -4,10 +4,11 @@
 #
 # Publish the already-built release to GitHub with `gh`.
 #
-# The archive and SHA256SUMS must exist in dist/ from `make release`. The script
-# verifies the checksum, requires the annotated tag to carry the same hash, and
-# creates a GitHub Release. It can create a draft for review or replace the
-# assets of an existing release.
+# The archive, SHA256SUMS, and COMMIT must exist in dist/ from `make release`.
+# The script verifies the checksum and requires the annotated tag to exist, to
+# point at HEAD, and to carry the same hash. It never creates or pushes a tag;
+# create and push it as described in docs/RELEASE.md. It can create a draft for
+# review or replace the assets of an existing release.
 #
 # Usage: publish.sh [--draft] [--clobber]
 
@@ -50,24 +51,23 @@ notes_dir="$root/dist/lanpull-$tag"
 [ -f "$tar" ] || die "missing $tar; run 'make release' first"
 [ -f "$sums" ] || die "missing $sums; run 'make release' first"
 [ -f "$notes_dir/RELEASE_NOTES.md" ] || die "missing $notes_dir/RELEASE_NOTES.md; run 'make release' first"
+[ -f "$root/dist/COMMIT" ] || die "missing dist/COMMIT; re-run 'make release' from the tagged commit"
 (cd "$root/dist" && sha256sum -c SHA256SUMS >/dev/null) || die "dist/SHA256SUMS does not match the archive"
 hash=$(cd "$root/dist" && sha256sum "lanpull-$tag.tar.gz" | cut -d' ' -f1)
 
-if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-    annotated=$(git tag -l --format='%(contents)' "$tag")
-    printf '%s\n' "$annotated" | grep -F "$hash" >/dev/null \
-        || die "tag $tag does not carry the archive hash; refusing to publish"
-    tag_commit=$(git rev-parse "$tag^{commit}")
-    head_commit=$(git rev-parse HEAD)
-    if [ "$tag_commit" != "$head_commit" ]; then
-        printf 'publish: note: %s points to %s, HEAD is %s; the assets come from the tag\n' \
-            "$tag" "$tag_commit" "$head_commit" >&2
-    fi
-else
-    git tag -a "$tag" -m "lanpull $version" \
-        -m "SHA256 (lanpull-$tag.tar.gz): $hash"
-    git push origin "$tag"
-fi
+dist_commit=$(tr -d '[:space:]' <"$root/dist/COMMIT")
+head_commit=$(git rev-parse HEAD)
+[ "$dist_commit" = "$head_commit" ] \
+    || die "dist was built from $dist_commit, HEAD is $head_commit; rebuild the archive"
+
+git rev-parse -q --verify "refs/tags/$tag" >/dev/null \
+    || die "tag $tag does not exist; create and push it first (see docs/RELEASE.md)"
+annotated=$(git tag -l --format='%(contents)' "$tag")
+printf '%s\n' "$annotated" | grep -F "$hash" >/dev/null \
+    || die "tag $tag does not carry the archive hash; refusing to publish"
+tag_commit=$(git rev-parse "$tag^{commit}")
+[ "$tag_commit" = "$head_commit" ] \
+    || die "tag $tag points to $tag_commit, HEAD is $head_commit; publish the tagged commit"
 
 notes=$(mktemp)
 trap 'rm -f "$notes"' EXIT

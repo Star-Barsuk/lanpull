@@ -13,26 +13,27 @@ set -eu
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 root=$(CDPATH='' cd -- "$script_dir/.." && pwd)
 
-files=""
+set --
 for file in "$root"/scripts/*.sh "$root"/scripts/git-hooks/*; do
     [ -f "$file" ] || continue
-    files="$files $file"
+    set -- "$@" "$file"
 done
 
-if [ -z "$files" ]; then
+if [ "$#" -eq 0 ]; then
     printf 'check-scripts: no scripts found\n'
     exit 0
 fi
 
 status=0
-# shellcheck disable=SC2086 # the list is intentionally split into arguments
-for file in $files; do
+for file in "$@"; do
     sh -n "$file" || status=1
 done
 
 if command -v shellcheck >/dev/null 2>&1; then
-    # shellcheck disable=SC2086 # the list is intentionally split into arguments
-    shellcheck -x -s sh $files || status=1
+    shellcheck -x -s sh "$@" || status=1
+elif [ "${REQUIRE_SHELLCHECK:-0}" = "1" ]; then
+    printf 'check-scripts: shellcheck is required by the full gate; install it and re-run\n' >&2
+    status=1
 else
     printf 'check-scripts: shellcheck not installed; checked syntax only\n' >&2
 fi

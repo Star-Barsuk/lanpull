@@ -18,16 +18,20 @@ also be handed to the team directly.
 ## One-time setup
 
 ```bash
-make setup                       # Rust toolchain and the gate tools
-make -C server release-setup     # cargo-about (release only)
+make setup       # Rust toolchain and the gate tools, including cargo-about
 ```
+
+`make -C server release-setup` remains available to install only
+`cargo-about` on a machine set up before it became part of `make setup`.
 
 ## Build
 
 The working tree must be clean: the release is built from a commit, and the
-script refuses uncommitted changes. It runs `make ci-full`, builds the static
-binary, checks that the third-party notices match the dependency graph, and
-writes the archive.
+script refuses uncommitted changes. It runs `make ci-full` (which includes the
+third-party notices check), builds the static binary, and writes the archive.
+Use `make release-check` to rehearse the same staging and checks from a working
+tree without requiring a commit; it still writes `dist/` but never tags or
+publishes.
 
 ```bash
 git status --short               # must be empty
@@ -39,8 +43,13 @@ Output:
 ```text
 dist/lanpull-v1.0.0.tar.gz
 dist/SHA256SUMS
+dist/COMMIT                      # commit the archive was built from
 dist/lanpull-v1.0.0/             # staging directory, safe to delete
 ```
+
+The script checks the staged binary and client versions, checks that the binary
+is statically linked, and uses the `## [<version>]` CHANGELOG section (falling
+back to `Unreleased` with a warning) for `RELEASE_NOTES.md`.
 
 The script prints the archive hash. After reviewing the archive, create an
 annotated tag and put the hash in its message, so the checksum is available
@@ -49,7 +58,7 @@ from git as well as next to the archive:
 ```bash
 git tag -a v1.0.0 -m "lanpull 1.0.0" \
   -m "SHA256 (lanpull-v1.0.0.tar.gz): <hash>"
-git push origin main --tags
+git push origin v1.0.0
 ```
 
 ## Publish to GitHub
@@ -71,10 +80,12 @@ gh release edit v1.0.0 --draft=false
 ```
 
 `make publish` creates a public release directly. Both commands verify
-`dist/SHA256SUMS`, require the annotated tag to carry the same hash, and upload
-the tarball, `SHA256SUMS`, and notes (the release notes plus the hash and the
-verification line). An existing release is not touched unless
-`scripts/publish.sh --clobber` is used, which replaces its assets and notes.
+`dist/SHA256SUMS`, require the annotated tag to exist, to point at HEAD, and to
+carry the same hash; they also require `dist/COMMIT` to match HEAD. The script
+never creates or pushes a tag itself. It uploads the tarball, `SHA256SUMS`, and
+notes (the release notes plus the hash and the verification line). An existing
+release is not touched unless `scripts/publish.sh --clobber` is used, which
+replaces its assets and notes.
 
 ## Archive contents
 
@@ -86,6 +97,9 @@ config/lanpull.conf.example     configuration template
 README.md  LICENSE
 THIRD_PARTY_LICENSES.md         licenses of the statically linked crates
 RELEASE_NOTES.md                the CHANGELOG section for this version
+docs/                           the public reference, security, contributing, release docs
+server/Cargo.toml               build metadata referenced by the README badges
+client/pyproject.toml           client tooling metadata referenced by the README badges
 ```
 
 The archive contains no configuration, credentials, keys, or `CHANGELOG.md`.

@@ -21,23 +21,32 @@ MYPY       := $(BIN)/mypy
 PYTEST     := $(BIN)/pytest
 PIP_AUDIT  := $(BIN)/pip-audit
 
-.PHONY: help setup check-tools lint typecheck test coverage audit clean ci
+.PHONY: help doctor setup check-tools format lint typecheck test coverage audit lock-check clean ci
 
 help: ## Show available targets
 	@awk 'BEGIN { FS = " ## " } /^[a-zA-Z0-9_-]+:.*## / { split($$1, t, ":"); printf "  %-16s %s\n", t[1], $$2 }' $(MAKEFILE_LIST)
 
-check-tools: ## Fail early when uv or python3 is missing
+doctor: ## Print the client development environment status
+	@printf 'client:\n'
+	@printf '  uv:       '; $(UV) --version 2>/dev/null || echo missing
+	@printf '  venv:     '; if [ -d $(VENV) ]; then echo present; else echo 'missing (run make setup)'; fi
+	@printf '  python:   '; if [ -x $(PYTHON) ]; then $(PYTHON) --version; else echo 'venv python missing'; fi
+
+check-tools:
 	@command -v $(UV) >/dev/null 2>&1 || { \
 		echo "lanpull: missing $(UV); install it and re-run (see README.md)" >&2; exit 1; }
 	@command -v python3 >/dev/null 2>&1 || { \
 		echo "lanpull: missing python3" >&2; exit 1; }
 
-$(STAMP): requirements-dev.in requirements-dev.txt | check-tools
+$(STAMP): requirements-dev.in requirements-dev.txt pyproject.toml | check-tools
 	@test -d $(VENV) || $(UV) venv --python $(PYTHON_VERSION) $(VENV)
-	$(UV) pip install --python $(PYTHON) -r requirements-dev.txt
+	$(UV) pip install --require-hashes --python $(PYTHON) -r requirements-dev.txt
 	@touch $(STAMP)
 
 setup: check-tools $(STAMP) ## Create the dev environment and install pinned tools
+
+format: $(STAMP) ## Format the client sources
+	$(RUFF) format .
 
 lint: $(STAMP) ## Lint and format-check the client
 	$(RUFF) check .
@@ -55,8 +64,20 @@ coverage: $(STAMP) ## Run the client tests with coverage (not a gate)
 audit: $(STAMP) ## Audit the development tools for known vulnerabilities
 	$(PIP_AUDIT) -r requirements-dev.txt
 
-clean: ## Remove the virtual environment and Python caches
-	rm -rf $(VENV) __pycache__ .pytest_cache .mypy_cache .ruff_cache
+lock-check: check-tools ## Fail when requirements-dev.txt is stale
+	@tmp=$$(mktemp); expected=$$(mktemp); \
+	trap 'rm -f "$$tmp" "$$expected"' EXIT; \
+	$(UV) pip compile --no-header --generate-hashes --python-version $(PYTHON_VERSION) \
+		requirements-dev.in -o "$$tmp" >/dev/null; \
+	sed '1,2d' requirements-dev.txt >"$$expected"; \
+	cmp -s "$$tmp" "$$expected" || { \
+		echo "lanpull: requirements-dev.txt is stale; regenerate it from requirements-dev.in" >&2; \
+		exit 1; \
+	}
+
+clean: ## Remove the virtual environment, coverage output, and Python caches
+	rm -rf $(VENV) __pycache__ .pytest_cache .mypy_cache .ruff_cache \
+		.coverage .coverage.* htmlcov coverage.xml
 	find . -name '*.pyc' -delete
 
-ci: check-tools lint typecheck test audit ## Run every client quality and security gate
+ci: check-tools lock-check lint typecheck test audit ## Run every client quality and security gate

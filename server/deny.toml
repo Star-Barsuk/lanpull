@@ -14,6 +14,7 @@ unsound = "all"
 yanked = "deny"
 # Every exception needs a reason and a review date, for example:
 #   { id = "RUSTSEC-0000-0000", reason = "not reachable; re-check 2026-12-31" }
+# Keep this list identical to `.cargo/audit.toml`; `make audit-config` checks it.
 ignore = []
 
 [graph]

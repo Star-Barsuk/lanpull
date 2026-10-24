@@ -1,5 +1,7 @@
 # lanpull cargo-audit configuration.
-# Enforced by `make audit` (`cargo audit`).
+# Enforced by `make audit` (`cargo audit`) and checked against deny.toml by
+# `make audit-config`. Keep this ignore list identical to `[advisories] ignore`
+# in deny.toml.
 # An ignored advisory must carry a reason and a review date, for example:
 #   { id = "RUSTSEC-0000-0000", reason = "not reachable; re-check 2026-12-31" }
 

@@ -278,20 +278,28 @@ Makefile    # thin pattern forwarder to server/ and client/
 
 ## 🛠️ Development
 
-Each side carries its own Makefile and its own static-analysis configuration;
-the root `Makefile` forwards to both.
+Each side carries its own Makefile and its own static-analysis configuration.
+The root `Makefile` forwards `make <target>` to the server and
+`make client-<target>` to the client; `check`, `test-all`, `ci`, `ci-full`, and
+`setup` cover both sides.
 
 ```bash
-make ci              # fast loop: both sides, no e2e, no secret scan
-make ci-full         # the gate: secrets, docs check, both sides, loopback e2e
+make doctor          # toolchain and optional tool status
+make check           # fast static checks on both sides, no tests
+make test-all        # Rust and Python test suites
+make ci              # fast loop: both sides, no e2e or secret scan
+make ci-full         # the gate: secrets, docs, both sides, notices, audit-bin, e2e
 make -C server e2e   # loopback end-to-end round of the real server and pull.py
-make secrets         # tracked-file secret scan (gitleaks or fallback)
+make secrets         # working-tree secret scan (gitleaks or fallback)
 make docs-check      # links, the public/private boundary, the client version
 make check-scripts   # repository shell scripts (sh -n and shellcheck)
 make coverage        # coverage report (advisory; make client-coverage too)
+make -C server geiger # unsafe inventory (advisory, not part of the gate)
+make -C server msrv   # check the declared MSRV 1.88 when installed
 make -C server fuzz  # nightly fuzz smoke of the parsers (not part of the gate)
 make -C server bench # criterion baselines (advisory)
 make -C server dast  # TLS/HTTP probes (needs testssl.sh; not part of the gate)
+make release-check   # rehearse the release layout from the working tree
 make hooks           # install the optional pre-push net
 ```
 
@@ -299,9 +307,12 @@ make hooks           # install the optional pre-push net
 create their uv-managed `.venv` on the minimum supported Python (3.11) on first
 run (`make -C client setup`), from the hash-locked `requirements-dev.txt`. The
 toolchain (`server/rust-toolchain.toml`) and the gate tools are pinned to
-known-good versions; bump them deliberately, never inline. There is intentionally
-**no hosted CI**: the gate is `make ci-full`, run deliberately before a push, and
-the pre-push hook is a net rather than the gate.
+known-good versions; bump them deliberately, never inline. `make ci-full`
+requires `gitleaks` and `shellcheck` so the full gate is not silently weaker
+without them; install both from your package manager (or the upstream release)
+and the fast loop keeps the documented fallbacks. There is
+intentionally **no hosted CI**: the gate is `make ci-full`, run deliberately
+before a push, and the pre-push hook is a net rather than the gate.
 
 ---
 
