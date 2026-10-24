@@ -32,6 +32,16 @@ expect_fail() { # <description> <command...>
     fi
 }
 
+expect_success() { # <description> <command...>
+    description=$1
+    shift
+    if "$@" >/dev/null 2>&1; then
+        pass "$description"
+    else
+        fail_msg "$description (unexpected failure)"
+    fi
+}
+
 client=$tmp/client
 unit=$tmp/lanpull.service
 mkdir -p "$client"
@@ -63,6 +73,17 @@ expect_fail "uninstall requires the unit path" \
 expect_fail "distclean refuses a system path" "$script_dir/distclean.sh" /
 expect_fail "distclean refuses HOME" "$script_dir/distclean.sh" "$HOME"
 expect_fail "distclean refuses a missing directory" "$script_dir/distclean.sh" "$tmp/missing"
+
+expect_success "install --dry-run accepts a temporary layout" \
+    "$script_dir/install.sh" --binary /bin/true --bin-dir "$tmp/bin" \
+    --unit-src "$unit" --unit-dest "$tmp/unit" --state-dir "$tmp/state" \
+    --operator "$(id -un)" --group "$(id -gn)" --conf-dir "$tmp/conf" \
+    --client-dir "$client" --dry-run
+
+expect_success "uninstall --dry-run accepts a temporary layout" \
+    "$script_dir/uninstall.sh" --binary "$tmp/lanpull" --unit "$tmp/unit" \
+    --state-dir "$tmp/state" --conf-dir "$tmp/conf" \
+    --service lanpull-test.service --dry-run
 
 if [ "$fail" -eq 0 ]; then
     echo "guard tests passed"

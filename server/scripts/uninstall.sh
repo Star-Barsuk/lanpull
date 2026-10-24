@@ -17,6 +17,7 @@ unit=""
 state_dir=""
 conf_dir=""
 service="lanpull.service"
+dry_run=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -25,6 +26,7 @@ while [ "$#" -gt 0 ]; do
         --state-dir) state_dir=$2; shift 2 ;;
         --conf-dir) conf_dir=$2; shift 2 ;;
         --service) service=$2; shift 2 ;;
+        --dry-run) dry_run=1; shift ;;
         *) die "uninstall: unknown argument: $1" ;;
     esac
 done
@@ -34,6 +36,19 @@ done
 require_safe_path "$state_dir" STATE_DIR
 if [ -n "$conf_dir" ]; then
     require_safe_path "$conf_dir" CONFIG_DIR
+fi
+
+if [ "$dry_run" = 1 ]; then
+    printf 'would stop:    %s\n' "$service"
+    printf 'would remove:  %s\n' "$unit"
+    if [ -n "$binary" ]; then
+        printf 'would remove:  %s\n' "$binary"
+    fi
+    printf 'would remove:  %s\n' "$state_dir"
+    if [ -n "$conf_dir" ] && [ -d "$conf_dir" ]; then
+        printf 'would remove:  %s\n' "$conf_dir"
+    fi
+    exit 0
 fi
 
 # Stop the unit; tolerate an absent unit. The unit has no [Install] section, so

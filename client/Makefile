@@ -58,8 +58,8 @@ typecheck: $(STAMP) ## Static type-check the client
 test: $(STAMP) ## Run the client tests
 	$(PYTEST)
 
-coverage: $(STAMP) ## Run the client tests with coverage (not a gate)
-	$(PYTEST) --cov=pull --cov-report=term-missing
+coverage: $(STAMP) ## Run the client tests with coverage (floor 80%; not a gate)
+	$(PYTEST) --cov=pull --cov-report=term-missing --cov-fail-under=80
 
 audit: $(STAMP) ## Audit the development tools for known vulnerabilities
 	$(PIP_AUDIT) -r requirements-dev.txt
