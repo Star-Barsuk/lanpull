@@ -54,7 +54,9 @@ git push origin main --tags
 
 ## Publish to GitHub
 
-The GitHub CLI is a release-only tool. Authenticate once:
+The GitHub CLI is a release-only tool. Install it from the distribution
+package (`apt install gh` on Debian/Ubuntu; 2.46 or newer covers this flow) or
+from its release tarball on systems without a package. Authenticate once:
 
 ```bash
 gh auth login
