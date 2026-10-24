@@ -17,6 +17,10 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 root=$(CDPATH='' cd -- "$script_dir/.." && pwd)
 cd "$root"
 
+# gh is commonly installed user-locally; do not require a PATH edit.
+PATH="$HOME/.local/bin:$PATH"
+export PATH
+
 draft=0
 clobber=0
 for arg in "$@"; do
