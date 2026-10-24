@@ -305,6 +305,14 @@ the pre-push hook is a net rather than the gate.
 
 ---
 
+## 📦 Releases
+
+Release archives are built from a tagged commit with `make release`; the
+contents, checksum, and verification steps are in
+[docs/RELEASE.md](docs/RELEASE.md).
+
+---
+
 <a id="troubleshooting"></a>
 ## 🩺 Troubleshooting
 
