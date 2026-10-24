@@ -66,6 +66,7 @@ fi
 # --- 2. Relative Markdown links -----------------------------------------
 documents=$(cd "$root" && find . -name '*.md' \
     -not -path './.git/*' -not -path './client/.venv/*' -not -path './server/target/*' \
+    -not -path './tools/*' \
     | sed 's|^\./||' | sort)
 while IFS= read -r document; do
     [ -n "$document" ] || continue
