@@ -1,8 +1,9 @@
 # Release process
 
 lanpull releases are built locally from a tagged commit. There is no hosted
-CI or artifact registry: the archive and its checksum are handed to the team
-directly.
+CI. Publication is a local `gh` step: the archive, checksum, and notes are
+attached to a GitHub Release (draft first by default), and the same files can
+also be handed to the team directly.
 
 ## Versioning
 
@@ -51,6 +52,28 @@ git tag -a v1.0.0 -m "lanpull 1.0.0" \
 git push origin main --tags
 ```
 
+## Publish to GitHub
+
+The GitHub CLI is a release-only tool. Authenticate once:
+
+```bash
+gh auth login
+```
+
+Build first (`make release`), then create a draft and review it:
+
+```bash
+make publish-draft
+gh release view v1.0.0 --web
+gh release edit v1.0.0 --draft=false
+```
+
+`make publish` creates a public release directly. Both commands verify
+`dist/SHA256SUMS`, require the annotated tag to carry the same hash, and upload
+the tarball, `SHA256SUMS`, and notes (the release notes plus the hash and the
+verification line). An existing release is not touched unless
+`scripts/publish.sh --clobber` is used, which replaces its assets and notes.
+
 ## Archive contents
 
 ```text
@@ -89,4 +112,5 @@ hash in the tag message is the record of what was released.
 - SBOM generation (the lockfile and `cargo audit bin` cover the inventory).
 - Artifact signing (checksums only for now).
 - Reproducible builds byte-for-byte.
-- A hosted registry or automated release pipeline.
+- A hosted CI workflow or an automated release pipeline; publication is the
+  local `gh` step above.
