@@ -7,10 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [1.0.0] - 2026-10-24
-
-The first supported release. The client script keeps its own technical version
-(2.3.1) for self-update; the product version is 1.0.0.
+The planned first supported release. The client script keeps its own technical
+version (2.3.1) for self-update; the product version is 1.0.0. The 1.0.0 tag
+and GitHub Release were withdrawn before publication; the content below is the
+release candidate.
 
 ### Added
 
