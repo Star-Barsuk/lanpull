@@ -15,6 +15,12 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 root=$(CDPATH='' cd -- "$script_dir/.." && pwd)
 cd "$root"
 
+# The toolchain and cargo-about live in the user's Cargo home; locate them
+# without requiring the caller to edit PATH.
+CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}
+PATH="$CARGO_HOME/bin:$PATH"
+export PATH
+
 die() {
     printf 'release: %s\n' "$*" >&2
     exit 1
