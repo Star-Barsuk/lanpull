@@ -58,7 +58,7 @@ UNINSTALL_CMD = $(SCRIPTS)/uninstall.sh --binary "$(LANPULL)" --unit "$(UNIT)" \
 	--service "$(SERVICE)"
 
 .PHONY: help setup build install uninstall wipe \
-        clean distclean confirm check-tools check-scripts check-core cli-test e2e client-bundle \
+        clean distclean confirm check-tools check-scripts check-core cli-test e2e dast client-bundle \
         fmt fmt-check lint doc test coverage bench fuzz machete deny audit audit-bin geiger security ci
 
 help: ## Show available targets
@@ -133,6 +133,11 @@ check-scripts: ## Parse the server shell scripts (shellcheck runs when installed
 
 e2e: build ## Run the loopback end-to-end smoke test (dev only; needs python3)
 	$(SCRIPTS)/e2e.sh "$(abspath $(BINARY))" "$(abspath $(CLIENT_DIR))"
+
+dast: build ## Run the local DAST checks (testssl.sh + HTTP probes; not a gate)
+	@command -v testssl.sh >/dev/null 2>&1 || [ -n "$$TESTSSL" ] || { \
+		echo "lanpull: missing testssl.sh; set TESTSSL=/path/to/testssl.sh" >&2; exit 1; }
+	$(SCRIPTS)/dast.sh "$(abspath $(BINARY))" "$(abspath $(CLIENT_DIR))"
 
 fmt: ## Format Rust sources
 	$(CARGO) fmt --all

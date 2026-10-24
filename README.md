@@ -291,6 +291,7 @@ make check-scripts   # repository shell scripts (sh -n and shellcheck)
 make coverage        # coverage report (advisory; make client-coverage too)
 make -C server fuzz  # nightly fuzz smoke of the parsers (not part of the gate)
 make -C server bench # criterion baselines (advisory)
+make -C server dast  # TLS/HTTP probes (needs testssl.sh; not part of the gate)
 make hooks           # install the optional pre-push net
 ```
 
