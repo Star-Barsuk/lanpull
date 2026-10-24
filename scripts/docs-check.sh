@@ -24,8 +24,8 @@ note() {
 
 # --- 1. Public/private boundary -----------------------------------------
 # The public files and trees a reader can reach from the repository.
-public_paths="README.md docs/REFERENCE.md docs/SECURITY.md docs/CONTRIBUTING.md client server config systemd Makefile scripts"
-allowed_docs="REFERENCE.md SECURITY.md CONTRIBUTING.md"
+public_paths="README.md CHANGELOG.md docs/REFERENCE.md docs/SECURITY.md docs/CONTRIBUTING.md docs/RELEASE.md client server config systemd Makefile scripts"
+allowed_docs="REFERENCE.md SECURITY.md CONTRIBUTING.md RELEASE.md"
 
 # shellcheck disable=SC2086 # the path list is intentionally split into arguments
 references=$(cd "$root" && grep -rn \
@@ -47,7 +47,7 @@ fi
 # Public files may only name the public documents. A bare name (without the
 # docs/ prefix) is still a reference, so the allowlist is applied to every
 # Markdown file name a public file mentions.
-allowed_names="README.md REFERENCE.md SECURITY.md CONTRIBUTING.md"
+allowed_names="README.md CHANGELOG.md REFERENCE.md SECURITY.md CONTRIBUTING.md RELEASE.md THIRD_PARTY_LICENSES.md RELEASE_NOTES.md"
 # shellcheck disable=SC2086 # the path list is intentionally split into arguments
 mentions=$(cd "$root" && grep -rhoE --exclude-dir=target --exclude-dir=.venv \
     --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=fixtures '[A-Za-z0-9_-]+\.md' $public_paths 2>/dev/null | sort -u || true)
