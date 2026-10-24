@@ -63,6 +63,9 @@ release candidate.
 - The gate compiles benches and examples (`check-targets`), checks that
   `cargo-audit` and `cargo-deny` ignore the same advisories, and runs negative
   safety tests for the privileged scripts (`guard-test`).
+- Coverage commands have low regression floors (53% Rust lines, 80% Python
+  combined) while staying advisory. `make -C server load` runs eight concurrent
+  loopback clients, and the periodic DAST passed against the release binary.
 - The systemd unit drops all capabilities, uses a `@system-service` syscall
   allowlist, private devices, clock/log protection, and `UMask=0077`
   (`systemd-analyze security` exposure 1.7 OK).

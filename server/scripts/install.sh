@@ -21,6 +21,7 @@ operator=""
 group=""
 conf_dir=""
 client_dir=""
+dry_run=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -33,6 +34,7 @@ while [ "$#" -gt 0 ]; do
         --group) group=$2; shift 2 ;;
         --conf-dir) conf_dir=$2; shift 2 ;;
         --client-dir) client_dir=$2; shift 2 ;;
+        --dry-run) dry_run=1; shift ;;
         *) die "install: unknown argument: $1" ;;
     esac
 done
@@ -49,6 +51,15 @@ done
 [ -n "$client_dir" ] || die "install: --client-dir is required"
 require_safe_path "$state_dir" STATE_DIR
 require_safe_path "$conf_dir" CONFIG_DIR
+
+if [ "$dry_run" = 1 ]; then
+    printf 'would install: %s\n' "$bin_dir/lanpull"
+    printf 'would install: %s\n' "$unit_dest"
+    printf 'would create:  %s (operator %s)\n' "$state_dir" "$operator"
+    printf 'would create:  %s\n' "$conf_dir"
+    printf 'would stage:   %s/client\n' "$state_dir"
+    exit 0
+fi
 
 # 1. State directory, owned by the operator.
 run_root install -d -m700 -o "$operator" -g "$group" "$state_dir"

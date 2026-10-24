@@ -72,7 +72,7 @@ UNINSTALL_CMD = $(SCRIPTS)/uninstall.sh --binary "$(LANPULL)" --unit "$(UNIT)" \
 	--service "$(SERVICE)"
 
 .PHONY: help doctor setup build build-debug install uninstall wipe \
-        clean distclean confirm check-tools check-build-tools check-scripts check-core guard-test cli-test e2e dast \
+        clean distclean confirm check-tools check-build-tools check-scripts check-core guard-test cli-test e2e dast load \
         release-setup licenses licenses-check msrv \
         fmt fmt-check lint doc test check-targets coverage bench fuzz machete deny audit audit-bin audit-config geiger security ci
 
@@ -227,6 +227,10 @@ guard-test: ## Run negative safety tests for the privileged scripts
 e2e: build ## Run the loopback end-to-end smoke test (dev only; needs python3)
 	$(SCRIPTS)/e2e.sh "$(abspath $(BINARY))" "$(abspath $(CLIENT_DIR))"
 
+LOAD_CLIENTS ?= 8
+load: build ## Run concurrent loopback clients (periodic; not a gate)
+	$(SCRIPTS)/load_test.sh "$(abspath $(BINARY))" "$(abspath $(CLIENT_DIR))" "$(LOAD_CLIENTS)"
+
 dast: build ## Run the local DAST checks (testssl.sh + HTTP probes; not a gate)
 	@command -v testssl.sh >/dev/null 2>&1 || [ -n "$$TESTSSL" ] || { \
 		echo "lanpull: missing testssl.sh; set TESTSSL=/path/to/testssl.sh" >&2; exit 1; }
@@ -262,12 +266,12 @@ msrv: ## Check the declared MSRV (requires the MSRV toolchain)
 bench: ## Run the criterion benchmarks (advisory; not a gate)
 	$(CARGO) bench --locked --workspace
 
-coverage: ## Report test coverage (cargo-llvm-cov; not a gate)
+coverage: ## Report test coverage (floor 53% lines; not a gate)
 	@command -v cargo-llvm-cov >/dev/null 2>&1 || { \
 		echo "lanpull: missing cargo-llvm-cov; install it with 'cargo install cargo-llvm-cov --locked' and 'rustup component add llvm-tools-preview'" >&2; \
 		exit 1; \
 	}
-	$(CARGO) llvm-cov --locked --workspace --summary-only
+	$(CARGO) llvm-cov --locked --workspace --summary-only --fail-under-lines 53
 
 FUZZ_TARGETS := config glob manifest relpath
 FUZZ_TIME    ?= 20
