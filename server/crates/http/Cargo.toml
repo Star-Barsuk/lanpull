@@ -11,13 +11,14 @@ repository.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
+publish = false
 
 [lints]
 workspace = true
 
 [dependencies]
-lanpull-core = { path = "../core", version = "0.1.0" }
-lanpull-store = { path = "../store", version = "0.1.0" }
+lanpull-core = { path = "../core", version = "1.0.0" }
+lanpull-store = { path = "../store", version = "1.0.0" }
 axum.workspace = true
 axum-server.workspace = true
 base64.workspace = true

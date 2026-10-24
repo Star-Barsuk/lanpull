@@ -11,6 +11,7 @@ repository.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
+publish = false
 
 [lints]
 workspace = true
@@ -20,9 +21,9 @@ name = "lanpull"
 path = "src/main.rs"
 
 [dependencies]
-lanpull-core = { path = "../core", version = "0.1.0" }
-lanpull-store = { path = "../store", version = "0.1.0" }
-lanpull-http = { path = "../http", version = "0.1.0" }
+lanpull-core = { path = "../core", version = "1.0.0" }
+lanpull-store = { path = "../store", version = "1.0.0" }
+lanpull-http = { path = "../http", version = "1.0.0" }
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
