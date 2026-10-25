@@ -295,6 +295,7 @@ make docs-check      # links, the public/private boundary, the client version
 make check-scripts   # repository shell scripts (sh -n and shellcheck)
 make coverage        # coverage report (advisory; make client-coverage too)
 make -C server coverage-e2e # instrumented CLI/e2e coverage (advisory)
+make -C server coverage-clean # remove leftover LLVM coverage profiles
 make -C server geiger # unsafe inventory (advisory, not part of the gate)
 make -C server msrv   # check the declared MSRV 1.88 when installed
 make -C server test-musl # run the suite against the musl target

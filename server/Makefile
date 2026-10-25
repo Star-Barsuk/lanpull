@@ -74,7 +74,7 @@ UNINSTALL_CMD = $(SCRIPTS)/uninstall.sh --binary "$(LANPULL)" --unit "$(UNIT)" \
 .PHONY: help doctor setup build build-debug install uninstall wipe \
         clean distclean confirm check-tools check-build-tools check-scripts check-core guard-test cli-test e2e dast load soak \
         release-setup licenses licenses-check msrv \
-        fmt fmt-check lint doc test test-musl check-targets coverage coverage-e2e bench fuzz fuzz-check machete deny audit audit-bin audit-config geiger security ci
+        fmt fmt-check lint doc test test-musl check-targets coverage coverage-e2e coverage-clean bench fuzz fuzz-check machete deny audit audit-bin audit-config geiger security ci
 
 help: ## Show available targets
 	@$(SCRIPTS)/help.sh
@@ -156,6 +156,7 @@ wipe: confirm ## Remove everything lanpull created (CONFIRM=1)
 
 clean: ## Remove build artifacts and caches (no root)
 	$(CARGO) clean
+	rm -f ./*.profraw
 	@if [ -d "$(CLIENT_DIR)" ]; then \
 		$(MAKE) -C $(CLIENT_DIR) clean; \
 	else \
@@ -289,14 +290,22 @@ coverage-e2e: ## Coverage of the CLI and e2e paths (advisory; not a gate)
 		echo "lanpull: missing cargo-llvm-cov; install it with 'cargo install cargo-llvm-cov --locked' and 'rustup component add llvm-tools-preview'" >&2; \
 		exit 1; \
 	}
-	@$(CARGO) clean
-	@set -e; eval "$$($(CARGO) llvm-cov show-env --sh 2>/dev/null)"; \
-		export LLVM_PROFILE_FILE="$(abspath target)/coverage-%p-%m.profraw"; \
+	@set -e; \
+		cleanup() { $(CARGO) clean >/dev/null 2>&1 || true; rm -f "$$PWD"/*.profraw; }; \
+		trap cleanup EXIT INT TERM; \
+		$(CARGO) clean; \
+		mkdir -p target/coverage-e2e; \
+		eval "$$($(CARGO) llvm-cov show-env --sh 2>/dev/null)"; \
+		export LLVM_PROFILE_FILE="$(abspath target/coverage-e2e)/%p-%m.profraw"; \
 		$(CARGO) build --locked; \
 		$(SCRIPTS)/cli_test.sh "$(abspath target/debug/lanpull)"; \
 		$(SCRIPTS)/e2e.sh "$(abspath target/debug/lanpull)" "$(abspath $(CLIENT_DIR))"; \
-		$(CARGO) llvm-cov report --summary-only --fail-under-lines 75; \
-		rm -f "$(CURDIR)"/*.profraw
+		mv target/coverage-e2e/*.profraw target/; \
+		$(CARGO) llvm-cov report --summary-only --fail-under-lines 75
+
+coverage-clean: ## Remove LLVM coverage profiles
+	rm -rf target/coverage-e2e
+	rm -f ./*.profraw target/*.profraw
 
 FUZZ_TARGETS := config glob manifest relpath
 FUZZ_TIME    ?= 20
