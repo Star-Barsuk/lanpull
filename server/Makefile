@@ -72,9 +72,9 @@ UNINSTALL_CMD = $(SCRIPTS)/uninstall.sh --binary "$(LANPULL)" --unit "$(UNIT)" \
 	--service "$(SERVICE)"
 
 .PHONY: help doctor setup build build-debug install uninstall wipe \
-        clean distclean confirm check-tools check-build-tools check-scripts check-core guard-test cli-test e2e dast load \
+        clean distclean confirm check-tools check-build-tools check-scripts check-core guard-test cli-test e2e dast load soak \
         release-setup licenses licenses-check msrv \
-        fmt fmt-check lint doc test check-targets coverage bench fuzz machete deny audit audit-bin audit-config geiger security ci
+        fmt fmt-check lint doc test test-musl check-targets coverage coverage-e2e bench fuzz fuzz-check machete deny audit audit-bin audit-config geiger security ci
 
 help: ## Show available targets
 	@$(SCRIPTS)/help.sh
@@ -228,8 +228,16 @@ e2e: build ## Run the loopback end-to-end smoke test (dev only; needs python3)
 	$(SCRIPTS)/e2e.sh "$(abspath $(BINARY))" "$(abspath $(CLIENT_DIR))"
 
 LOAD_CLIENTS ?= 8
+SOAK_ROUNDS  ?= 3
 load: build ## Run concurrent loopback clients (periodic; not a gate)
 	$(SCRIPTS)/load_test.sh "$(abspath $(BINARY))" "$(abspath $(CLIENT_DIR))" "$(LOAD_CLIENTS)"
+
+soak: build ## Repeat the concurrent load smoke (periodic; not a gate)
+	@round=1; while [ "$$round" -le "$(SOAK_ROUNDS)" ]; do \
+		echo "soak: round $$round/$(SOAK_ROUNDS)"; \
+		$(SCRIPTS)/load_test.sh "$(abspath $(BINARY))" "$(abspath $(CLIENT_DIR))" "$(LOAD_CLIENTS)" || exit 1; \
+		round=$$((round + 1)); \
+	done
 
 dast: build ## Run the local DAST checks (testssl.sh + HTTP probes; not a gate)
 	@command -v testssl.sh >/dev/null 2>&1 || [ -n "$$TESTSSL" ] || { \
@@ -253,6 +261,9 @@ doc: ## Build docs and deny warnings (catches broken intra-doc links)
 test: ## Run the Rust test suite
 	$(CARGO) test --locked --workspace
 
+test-musl: check-build-tools ## Run the test suite against the musl target
+	$(CARGO) test --locked --workspace --target $(TARGET)
+
 check-targets: ## Compile tests, benches, and examples without running them
 	$(CARGO) test --locked --workspace --all-targets --no-run
 
@@ -272,6 +283,20 @@ coverage: ## Report test coverage (floor 53% lines; not a gate)
 		exit 1; \
 	}
 	$(CARGO) llvm-cov --locked --workspace --summary-only --fail-under-lines 53
+
+coverage-e2e: ## Coverage of the CLI and e2e paths (advisory; not a gate)
+	@command -v cargo-llvm-cov >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-llvm-cov; install it with 'cargo install cargo-llvm-cov --locked' and 'rustup component add llvm-tools-preview'" >&2; \
+		exit 1; \
+	}
+	@$(CARGO) clean
+	@set -e; eval "$$($(CARGO) llvm-cov show-env --sh 2>/dev/null)"; \
+		export LLVM_PROFILE_FILE="$(abspath target)/coverage-%p-%m.profraw"; \
+		$(CARGO) build --locked; \
+		$(SCRIPTS)/cli_test.sh "$(abspath target/debug/lanpull)"; \
+		$(SCRIPTS)/e2e.sh "$(abspath target/debug/lanpull)" "$(abspath $(CLIENT_DIR))"; \
+		$(CARGO) llvm-cov report --summary-only --fail-under-lines 75; \
+		rm -f "$(CURDIR)"/*.profraw
 
 FUZZ_TARGETS := config glob manifest relpath
 FUZZ_TIME    ?= 20
@@ -296,6 +321,9 @@ licenses-check: ## Fail when THIRD_PARTY_LICENSES.md is stale
 			echo "lanpull: THIRD_PARTY_LICENSES.md is stale; run 'make -C server licenses'" >&2; \
 			exit 1; \
 		}
+
+fuzz-check: ## Lint the detached fuzz crate (stable Clippy)
+	$(CARGO) clippy --locked --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
 
 fuzz: ## Run a short fuzz smoke over the parsers (nightly + cargo-fuzz; not a gate)
 	@command -v cargo-fuzz >/dev/null 2>&1 || { \

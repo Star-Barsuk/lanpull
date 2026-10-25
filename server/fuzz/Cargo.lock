@@ -314,7 +314,7 @@ dependencies = [
 
 [[package]]
 name = "lanpull-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "argon2",
  "hex",
@@ -341,7 +341,7 @@ dependencies = [
 
 [[package]]
 name = "lanpull-store"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "lanpull-core",
  "serde",

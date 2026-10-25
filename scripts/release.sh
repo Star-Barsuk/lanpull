@@ -21,6 +21,11 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 root=$(CDPATH='' cd -- "$script_dir/.." && pwd)
 cd "$root"
 
+# Reproducible archive timestamps: use the commit time unless the caller pins
+# SOURCE_DATE_EPOCH explicitly.
+SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct)}
+export SOURCE_DATE_EPOCH
+
 check=0
 for arg in "$@"; do
     case "$arg" in
@@ -135,7 +140,9 @@ $links
 EOF
 done
 
-tar -C "$dist" -czf "$dist/lanpull-$tag.tar.gz" "lanpull-$tag"
+tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 \
+    --numeric-owner -C "$dist" -cf "$dist/lanpull-$tag.tar" "lanpull-$tag"
+gzip -n -f "$dist/lanpull-$tag.tar"
 (cd "$dist" && sha256sum "lanpull-$tag.tar.gz" > SHA256SUMS && sha256sum -c SHA256SUMS >/dev/null)
 hash=$(cd "$dist" && sha256sum "lanpull-$tag.tar.gz" | cut -d' ' -f1)
 git rev-parse HEAD >"$dist/COMMIT"
@@ -147,6 +154,7 @@ fi
 
 printf '\nrelease: %s\n' "$dist/lanpull-$tag.tar.gz"
 printf 'sha256:  %s\n' "$hash"
+printf 'epoch:   %s\n' "$SOURCE_DATE_EPOCH"
 printf 'contents:\n'
 tar -tzf "$dist/lanpull-$tag.tar.gz" | sed 's/^/  /'
 if [ "$check" = 1 ]; then
