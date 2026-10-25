@@ -330,7 +330,7 @@ bloat: build ## Report binary size by crate (advisory; not a gate)
 		echo "lanpull: missing cargo-bloat; install it with 'cargo install --locked cargo-bloat'" >&2; exit 1; }
 	$(CARGO) bloat --release --target $(TARGET) --crates
 
-deadlinks: doc ## Check rustdoc links with cargo-deadlinks (advisory; not a gate)
+deadlinks: doc ## Check rustdoc links (advisory; known dispatcher false positive)
 	@command -v cargo-deadlinks >/dev/null 2>&1 || { \
 		echo "lanpull: missing cargo-deadlinks; install it with 'cargo install --locked cargo-deadlinks'" >&2; exit 1; }
 	$(CARGO) deadlinks --dir target/doc
