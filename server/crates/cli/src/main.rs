@@ -125,6 +125,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Access { command: sub } => {
             emit(command, cli::access::run(&config_path, sub)?, json)
         }
+        Command::Group { command: sub } => emit(command, cli::group::run(&config_path, sub)?, json),
         Command::Share { command: sub } => emit(command, cli::share::run(&config_path, sub)?, json),
         Command::Service { command: sub } => emit(command, cli::service::run(sub)?, json),
         Command::Config { command: sub } => {

@@ -111,6 +111,9 @@ pub struct ExportArgs {
 pub struct ArmArgs {
     /// Account names (omit with `--all`).
     pub names: Vec<String>,
+    /// Arm every account in these groups.
+    #[arg(long = "group", value_name = "GROUP")]
+    pub groups: Vec<String>,
     /// Arm every non-local account.
     #[arg(long, conflicts_with = "names")]
     pub all: bool,
@@ -124,6 +127,9 @@ pub struct ArmArgs {
 pub struct DisarmArgs {
     /// Account names (omit with `--all`).
     pub names: Vec<String>,
+    /// Clear every account in these groups.
+    #[arg(long = "group", value_name = "GROUP")]
+    pub groups: Vec<String>,
     /// Clear every account's arm window.
     #[arg(long, conflicts_with = "names")]
     pub all: bool,
@@ -200,6 +206,7 @@ struct AccountRow {
     allowed_ip: Option<String>,
     local: bool,
     rules: Vec<String>,
+    groups: Vec<String>,
 }
 
 /// Dispatch an account operation.
@@ -305,6 +312,7 @@ fn list(config_path: &Path) -> Result<Outcome> {
     let config = Config::load(config_path)?;
     let accounts = Clients::load(&config.clients_path)?;
     let access = policy::load_access(&config)?;
+    let policy = policy::Policy::load(&config.access_path)?;
 
     let rows: Vec<AccountRow> = accounts
         .iter()
@@ -313,6 +321,7 @@ fn list(config_path: &Path) -> Result<Outcome> {
             allowed_ip: account.allowed_ip.map(|ip| ip.to_string()),
             local: account.local,
             rules: access.rules(&account.name).iter().map(Rule::spec).collect(),
+            groups: policy.groups_of(&account.name),
         })
         .collect();
 
@@ -323,6 +332,7 @@ fn list(config_path: &Path) -> Result<Outcome> {
             "NAME".to_string(),
             "IP".to_string(),
             "SCOPE".to_string(),
+            "GROUPS".to_string(),
             "RULES".to_string(),
         ]];
         for row in &rows {
@@ -334,6 +344,7 @@ fn list(config_path: &Path) -> Result<Outcome> {
                 } else {
                     String::new()
                 },
+                row.groups.join(", "),
                 format!("[{}]", row.rules.join(", ")),
             ]);
         }
@@ -442,24 +453,43 @@ fn arm(config_path: &Path, args: ArmArgs) -> Result<Outcome> {
     let now = timeutil::now_unix();
     let expires = now.saturating_add(seconds);
 
-    let targets: Vec<String> = if args.all {
+    let mut targets: Vec<String> = Vec::new();
+    if args.all {
         if accounts.is_empty() {
             return Err(Error::Account("no accounts to arm".to_string()));
         }
-        accounts
-            .iter()
-            .filter(|account| !account.local)
-            .map(|account| account.name.clone())
-            .collect()
+        targets.extend(
+            accounts
+                .iter()
+                .filter(|account| !account.local)
+                .map(|account| account.name.clone()),
+        );
     } else {
-        if args.names.is_empty() {
+        if args.names.is_empty() && args.groups.is_empty() {
             return Err(Error::Usage(
-                "provide one or more names or --all".to_string(),
+                "provide one or more names, --group, or --all".to_string(),
             ));
         }
-        ensure_known(&accounts, &args.names)?;
-        args.names.clone()
-    };
+        if !args.names.is_empty() {
+            ensure_known(&accounts, &args.names)?;
+            targets.extend(args.names.clone());
+        }
+        if !args.groups.is_empty() {
+            let policy = policy::Policy::load(&config.access_path)?;
+            for group in &args.groups {
+                if !policy.groups().contains_key(group) {
+                    return Err(Error::Config(format!("no such group: {group}")));
+                }
+                for member in policy.members_of(group) {
+                    if accounts.get(&member).is_some() {
+                        targets.push(member);
+                    }
+                }
+            }
+        }
+    }
+    targets.sort();
+    targets.dedup();
 
     let mut state = ArmState::load(&config.arm_path())?;
     let mut outcome = Outcome::new();
@@ -527,17 +557,35 @@ fn disarm(config_path: &Path, args: DisarmArgs) -> Result<Outcome> {
         return Ok(outcome);
     }
 
-    if args.names.is_empty() {
+    if args.names.is_empty() && args.groups.is_empty() {
         return Err(Error::Usage(
-            "provide one or more names or --all".to_string(),
+            "provide one or more names, --group, or --all".to_string(),
         ));
     }
-    ensure_known(&accounts, &args.names)?;
+    let mut targets = args.names.clone();
+    if !args.groups.is_empty() {
+        let policy = policy::Policy::load(&config.access_path)?;
+        for group in &args.groups {
+            if !policy.groups().contains_key(group) {
+                return Err(Error::Config(format!("no such group: {group}")));
+            }
+            for member in policy.members_of(group) {
+                if accounts.get(&member).is_some() {
+                    targets.push(member);
+                }
+            }
+        }
+    }
+    targets.sort();
+    targets.dedup();
+    if !targets.is_empty() {
+        ensure_known(&accounts, &targets)?;
+    }
 
     let mut outcome = Outcome::new();
     let mut data: Vec<DisarmEntry> = Vec::new();
     let mut changed = false;
-    for name in &args.names {
+    for name in &targets {
         let was_armed = state.disarm(name);
         changed |= was_armed;
         let line = if was_armed {

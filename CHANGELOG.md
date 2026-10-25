@@ -33,6 +33,9 @@ release candidate.
   baselines, and a local DAST (`testssl.sh` plus HTTP probes).
 - Typed `--json` payloads and envelopes; a minimal `serve_tls` example that
   proves the transport is reusable.
+- Groups of accounts: named, possibly nested groups with cycle rejection,
+  group-scoped access grants/removals, effective access expansion, and
+  `account arm`/`disarm --group` for bulk authorization.
 
 ### Changed
 

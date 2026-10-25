@@ -29,6 +29,12 @@ pub enum AccessCommand {
         #[command(subcommand)]
         command: ClientCommand,
     },
+    /// Manage group additions and removals.
+    Group {
+        /// Group operation.
+        #[command(subcommand)]
+        command: GroupAccessCommand,
+    },
     /// Import an old flat access file into the policy.
     Import {
         /// Path to the old `lanpull.access` file.
@@ -50,6 +56,7 @@ impl AccessCommand {
         match self {
             Self::Public { command } => command.path(),
             Self::Client { command } => command.path(),
+            Self::Group { command } => command.path(),
             Self::Import { .. } => "access import",
             Self::Doctor => "access doctor",
             Self::Apply => "access apply",
@@ -102,6 +109,47 @@ pub struct PublicListArgs {
     pub share: Option<String>,
 }
 
+/// Group-permission operations.
+#[derive(Debug, Subcommand)]
+pub enum GroupAccessCommand {
+    /// Grant paths to a group.
+    Add {
+        /// Group name.
+        group: String,
+        /// Rules `<share>:<path>` (repeatable).
+        rules: Vec<String>,
+        /// Show what would change without writing the policy.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Revoke paths from a group.
+    Remove {
+        /// Group name.
+        group: String,
+        /// Rules `<share>:<path>` (repeatable).
+        rules: Vec<String>,
+        /// Do not ask for confirmation.
+        #[arg(long)]
+        yes: bool,
+        /// Show what would change without writing the policy.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Show the effective set for one or every group.
+    List(GroupAccessListArgs),
+}
+
+impl GroupAccessCommand {
+    /// The canonical dotted path of this command.
+    pub const fn path(&self) -> &'static str {
+        match self {
+            Self::Add { .. } => "access group add",
+            Self::Remove { .. } => "access group remove",
+            Self::List(_) => "access group list",
+        }
+    }
+}
+
 /// Per-client operations.
 #[derive(Debug, Subcommand)]
 pub enum ClientCommand {
@@ -150,6 +198,13 @@ pub struct ClientListArgs {
     pub name: Option<String>,
 }
 
+/// Arguments for `access group list`.
+#[derive(Debug, clap::Args)]
+pub struct GroupAccessListArgs {
+    /// Group name (default: every group).
+    pub group: Option<String>,
+}
+
 /// One effective rule row, used for JSON output.
 #[derive(Debug, Serialize)]
 struct RuleRow {
@@ -185,6 +240,20 @@ pub fn run(config_path: &Path, command: AccessCommand) -> Result<Outcome> {
                 dry_run,
             } => client_remove(config_path, &name, &rules, yes, dry_run),
             ClientCommand::List(args) => client_list(config_path, args),
+        },
+        AccessCommand::Group { command } => match command {
+            GroupAccessCommand::Add {
+                group,
+                rules,
+                dry_run,
+            } => group_access_add(config_path, &group, &rules, dry_run),
+            GroupAccessCommand::Remove {
+                group,
+                rules,
+                yes,
+                dry_run,
+            } => group_access_remove(config_path, &group, &rules, yes, dry_run),
+            GroupAccessCommand::List(args) => group_access_list(config_path, args),
         },
         AccessCommand::Import { from, dry_run } => import(config_path, &from, dry_run),
         AccessCommand::Doctor => doctor(config_path),
@@ -370,7 +439,7 @@ fn client_remove(
     for spec in specs {
         let (share, path) = policy::split_rule(spec)?;
         ensure_share(&config, &share)?;
-        policy.share_mut(&share)?.remove_for(name, &path);
+        policy.revoke(&share, name, &path, false)?;
     }
     let mut outcome = rule_outcome("revoke", "revoked", specs, dry_run);
     if accounts.get(name).is_none() {
@@ -384,6 +453,141 @@ fn client_remove(
     policy.save(&config.access_path)?;
     report_regeneration(&config, &mut outcome)?;
     Ok(outcome)
+}
+
+/// Add paths to a group's access.
+fn group_access_add(
+    config_path: &Path,
+    group: &str,
+    specs: &[String],
+    dry_run: bool,
+) -> Result<Outcome> {
+    let config = Config::load(config_path)?;
+    let mut policy = Policy::load(&config.access_path)?;
+    for spec in specs {
+        let (share, path) = policy::split_rule(spec)?;
+        ensure_share(&config, &share)?;
+        policy.share_mut(&share)?.add_for_group(group, path);
+    }
+    let mut outcome = rule_outcome("grant", "granted", specs, dry_run);
+    if !policy.groups.contains_key(group) {
+        outcome = outcome.warn(format!(
+            "group {group} does not exist yet; the rule applies once it is created"
+        ));
+    }
+    if dry_run {
+        return Ok(outcome);
+    }
+    policy.save(&config.access_path)?;
+    report_regeneration(&config, &mut outcome)?;
+    Ok(outcome)
+}
+
+/// Revoke paths from a group's access.
+fn group_access_remove(
+    config_path: &Path,
+    group: &str,
+    specs: &[String],
+    yes: bool,
+    dry_run: bool,
+) -> Result<Outcome> {
+    if !dry_run {
+        crate::confirm::require(yes, &format!("change access for group {group}"))?;
+    }
+    let config = Config::load(config_path)?;
+    let mut policy = Policy::load(&config.access_path)?;
+    for spec in specs {
+        let (share, path) = policy::split_rule(spec)?;
+        ensure_share(&config, &share)?;
+        policy.revoke(&share, group, &path, true)?;
+    }
+    let mut outcome = rule_outcome("revoke", "revoked", specs, dry_run);
+    if !policy.groups.contains_key(group) {
+        outcome = outcome.warn(format!(
+            "group {group} does not exist; the removal still applies to any public path"
+        ));
+    }
+    if dry_run {
+        return Ok(outcome);
+    }
+    policy.save(&config.access_path)?;
+    report_regeneration(&config, &mut outcome)?;
+    Ok(outcome)
+}
+
+/// Show the effective set for one or every group.
+fn group_access_list(config_path: &Path, args: GroupAccessListArgs) -> Result<Outcome> {
+    let config = Config::load(config_path)?;
+    let policy = Policy::load(&config.access_path)?;
+
+    let names: Vec<String> = if let Some(group) = args.group {
+        vec![group]
+    } else {
+        let mut names: Vec<String> = policy.groups.keys().cloned().collect();
+        for share_policy in policy.shares.values() {
+            for group in share_policy.groups.keys() {
+                if !names.iter().any(|known| known == group) {
+                    names.push(group.clone());
+                }
+            }
+        }
+        names.sort();
+        names.dedup();
+        names
+    };
+
+    let mut rows: Vec<RuleRow> = Vec::new();
+    for group in &names {
+        for (share, share_policy) in &policy.shares {
+            let (allowed, denied) = share_policy.effective(group, &policy.groups);
+            for path in allowed {
+                rows.push(RuleRow {
+                    account: group.clone(),
+                    share: share.clone(),
+                    path,
+                    deny: false,
+                });
+            }
+            for path in denied {
+                rows.push(RuleRow {
+                    account: group.clone(),
+                    share: share.clone(),
+                    path,
+                    deny: true,
+                });
+            }
+        }
+    }
+
+    if rows.is_empty() {
+        let lines = if names.is_empty() {
+            vec!["no groups".to_string()]
+        } else {
+            names
+                .iter()
+                .map(|group| format!("{group} (nothing)"))
+                .collect()
+        };
+        return Ok(Outcome::text(lines).with_data(&rows));
+    }
+
+    let mut grouped: Vec<(String, Vec<String>)> = Vec::new();
+    for row in &rows {
+        let spec = if row.deny {
+            format!("!{}:{}", row.share, row.path)
+        } else {
+            format!("{}:{}", row.share, row.path)
+        };
+        match grouped.last_mut() {
+            Some((account, specs)) if *account == row.account => specs.push(spec),
+            _ => grouped.push((row.account.clone(), vec![spec])),
+        }
+    }
+    let lines: Vec<String> = grouped
+        .iter()
+        .map(|(group, specs)| format!("{group}: {}", specs.join(", ")))
+        .collect();
+    Ok(Outcome::text(lines).with_data(&rows))
 }
 
 /// Show the effective set for one or every client.
@@ -411,7 +615,8 @@ fn client_list(config_path: &Path, args: ClientListArgs) -> Result<Outcome> {
     let mut rows: Vec<RuleRow> = Vec::new();
     for account in &names {
         for (share, share_policy) in &policy.shares {
-            for path in share_policy.allowed(account) {
+            let (allowed, denied) = share_policy.effective(account, &policy.groups);
+            for path in allowed {
                 rows.push(RuleRow {
                     account: account.clone(),
                     share: share.clone(),
@@ -419,7 +624,7 @@ fn client_list(config_path: &Path, args: ClientListArgs) -> Result<Outcome> {
                     deny: false,
                 });
             }
-            for path in share_policy.denied(account) {
+            for path in denied {
                 rows.push(RuleRow {
                     account: account.clone(),
                     share: share.clone(),
@@ -540,6 +745,32 @@ fn doctor(config_path: &Path) -> Result<Outcome> {
                     ));
                 }
             }
+        }
+        for (group, deltas) in &share_policy.groups {
+            if !policy.groups.contains_key(group) {
+                warnings.push(format!("policy references unknown group {group}"));
+            }
+            for path in &deltas.add {
+                check_exists(root, share, path, &mut warnings);
+            }
+            for path in &deltas.remove {
+                if !share_policy.public.contains(path) {
+                    warnings.push(format!(
+                        "{group}: removes {share}:{path} which is not in the public set"
+                    ));
+                }
+            }
+        }
+    }
+
+    for (group, def) in &policy.groups {
+        for member in &def.members {
+            if clients.get(member).is_none() && !policy.groups.contains_key(member) {
+                warnings.push(format!("group {group} references unknown member {member}"));
+            }
+        }
+        if def.members.is_empty() {
+            warnings.push(format!("group {group} has no members"));
         }
     }
 
