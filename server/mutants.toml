@@ -1,0 +1,5 @@
+# cargo-mutants configuration for `make -C server mutants`.
+# Test and benchmark code is not mutated; the fuzz crate is a separate
+# workspace and is not part of this run.
+exclude_globs = ["crates/*/tests/**", "crates/*/benches/**", "crates/*/examples/**"]
+timeout = 60

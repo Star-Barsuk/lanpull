@@ -1,0 +1,20 @@
+# typos configuration for `make spell`.
+# Generated and vendored trees are excluded; the project name is intentional.
+[files]
+extend-exclude = [
+    "target",
+    "dist",
+    "tools",
+    "client/.venv",
+    "server/target",
+    "server/fuzz/corpus",
+    "server/fuzz/artifacts",
+    "THIRD_PARTY_LICENSES.md",
+    "Cargo.lock",
+    "server/fuzz/Cargo.lock",
+]
+
+[default.extend-words]
+lanpull = "lanpull"
+# Intentional sed character class fragment: [Cc]ontent-[Ll]ength.
+ontent = "ontent"

@@ -10,14 +10,16 @@ useDefault = true
 [allowlist]
 description = "Generated, cached, and vendored trees are not project content"
 paths = [
-  '''(^|/)\.git/''',
-  '''(^|/)target/''',
-  '''(^|/)\.venv/''',
-  '''(^|/)__pycache__/''',
-  '''(^|/)\.pytest_cache/''',
-  '''(^|/)\.mypy_cache/''',
-  '''(^|/)\.ruff_cache/''',
-  '''(^|/)tools/''',
-  '''(^|/)fuzz/corpus/''',
-  '''(^|/)fuzz/artifacts/''',
+    '''(^|/)\.git/''',
+    '''(^|/)target/''',
+    '''(^|/)\.venv/''',
+    '''(^|/)__pycache__/''',
+    '''(^|/)\.pytest_cache/''',
+    '''(^|/)\.mypy_cache/''',
+    '''(^|/)\.ruff_cache/''',
+    '''(^|/)tools/''',
+    '''(^|/)fuzz/corpus/''',
+    '''(^|/)fuzz/artifacts/''',
+    '''(^|/)mutants\.out/''',
+    '''(^|/)mutants\.out\.old/''',
 ]

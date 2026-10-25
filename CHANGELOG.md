@@ -77,6 +77,9 @@ release candidate.
 - LLVM coverage profiles are written under `target/coverage-e2e/`; the target
   cleans the instrumented build and profiles automatically, and
   `make -C server coverage-clean` removes leftovers.
+- An optional advisory layer (`setup-advisory`, `nextest`, `hack`, `spell`,
+  `toml-check`, `mutants`, `vet`, `bloat`, `deadlinks`) from common Rust
+  practice is available without changing the blocking gate.
 - The systemd unit drops all capabilities, uses a `@system-service` syscall
   allowlist, private devices, clock/log protection, and `UMask=0077`
   (`systemd-analyze security` exposure 1.7 OK).
