@@ -294,12 +294,18 @@ make secrets         # working-tree secret scan (gitleaks or fallback)
 make docs-check      # links, the public/private boundary, the client version
 make check-scripts   # repository shell scripts (sh -n and shellcheck)
 make coverage        # coverage report (advisory; make client-coverage too)
+make -C server coverage-e2e # instrumented CLI/e2e coverage (advisory)
 make -C server geiger # unsafe inventory (advisory, not part of the gate)
 make -C server msrv   # check the declared MSRV 1.88 when installed
+make -C server test-musl # run the suite against the musl target
 make -C server fuzz  # nightly fuzz smoke of the parsers (not part of the gate)
+make -C server fuzz-check # stable Clippy over the fuzz crate
+make -C server load  # concurrent loopback clients
+make -C server soak  # repeat the concurrency smoke
 make -C server bench # criterion baselines (advisory)
 make -C server dast  # TLS/HTTP probes (needs testssl.sh; not part of the gate)
 make release-check   # rehearse the release layout from the working tree
+make release-repro   # build the archive twice and compare the hashes
 make hooks           # install the optional pre-push net
 ```
 
@@ -307,8 +313,9 @@ make hooks           # install the optional pre-push net
 create their uv-managed `.venv` on the minimum supported Python (3.11) on first
 run (`make -C client setup`), from the hash-locked `requirements-dev.txt`. The
 toolchain (`server/rust-toolchain.toml`) and the gate tools are pinned to
-known-good versions; bump them deliberately, never inline. `make ci-full`
-requires `gitleaks` and `shellcheck` so the full gate is not silently weaker
+known-good versions; bump them deliberately, never inline. `make -j2 ci` runs
+the server and client halves concurrently. `make ci-full` requires `gitleaks`
+and `shellcheck` so the full gate is not silently weaker
 without them; install both from your package manager (or the upstream release)
 and the fast loop keeps the documented fallbacks. There is
 intentionally **no hosted CI**: the gate is `make ci-full`, run deliberately

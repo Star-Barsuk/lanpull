@@ -39,6 +39,8 @@ release candidate.
 - The client gate runs on Python 3.11 with a hash-locked tool set and now
   checks that `requirements-dev.txt` matches `requirements-dev.in`;
   `make client-format` formats the client.
+- Unused license allowances were removed from `deny.toml`/`about.toml`, and the
+  detached fuzz lockfile was refreshed to match the workspace crates.
 - The release profile keeps overflow checks, thin LTO, one codegen unit, and
   strips symbols; the binary is built for `x86_64-unknown-linux-musl`.
 - The pipeline is split into `make check`, `make test-all`, `make ci`, and
@@ -63,9 +65,15 @@ release candidate.
 - The gate compiles benches and examples (`check-targets`), checks that
   `cargo-audit` and `cargo-deny` ignore the same advisories, and runs negative
   safety tests for the privileged scripts (`guard-test`).
-- Coverage commands have low regression floors (53% Rust lines, 80% Python
-  combined) while staying advisory. `make -C server load` runs eight concurrent
-  loopback clients, and the periodic DAST passed against the release binary.
+- Coverage commands have low regression floors (53% Rust test-only lines, 75%
+  with CLI/e2e instrumentation, 80% Python combined) while staying advisory.
+  `make -C server load` and `soak` run concurrent loopback clients, and the
+  periodic DAST passed against the release binary.
+- The release archive is reproducible: deterministic tar metadata, commit-time
+  `SOURCE_DATE_EPOCH`, gzip without timestamps, and `make release-repro` builds
+  it twice and compares the hashes.
+- `make -C server test-musl` runs the suite against the musl target, and
+  `make -C server fuzz-check` runs stable Clippy over the detached fuzz crate.
 - The systemd unit drops all capabilities, uses a `@system-service` syscall
   allowlist, private devices, clock/log protection, and `UMask=0077`
   (`systemd-analyze security` exposure 1.7 OK).

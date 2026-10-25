@@ -51,6 +51,10 @@ The script checks the staged binary and client versions, checks that the binary
 is statically linked, and uses the `## [<version>]` CHANGELOG section (falling
 back to `Unreleased` with a warning) for `RELEASE_NOTES.md`.
 
+The archive is reproducible: tar entries are sorted with the commit-time
+`SOURCE_DATE_EPOCH`, the numeric owner is fixed, and gzip stores no timestamp.
+`make release-repro` runs the staging twice and compares the SHA256 values.
+
 The script prints the archive hash. After reviewing the archive, create an
 annotated tag and put the hash in its message, so the checksum is available
 from git as well as next to the archive:
