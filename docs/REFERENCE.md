@@ -167,6 +167,14 @@ matches within a segment, `**` across segments.
 | `access client add <name> <share>:<path>...` | Add paths for one account (`--dry-run`). |
 | `access client remove <name> <share>:<path>...` | Remove paths (including public ones) for one account (`--yes`, `--dry-run`). |
 | `access client list [<name>]` | Show the effective set per account (or one). |
+| `access group add <group> <share>:<path>...` | Add paths for a group (`--dry-run`). |
+| `access group remove <group> <share>:<path>...` | Remove paths (including public ones) for a group (`--yes`, `--dry-run`). |
+| `access group list [<group>]` | Show the effective set per group (or one). |
+| `group create <name>` | Create a group (`--dry-run`). |
+| `group remove <name>` | Remove a group (`--yes`, `--dry-run`). |
+| `group member add <group> <member>...` | Add members to a group (`--dry-run`). |
+| `group member remove <group> <member>...` | Remove members from a group (`--dry-run`). |
+| `group list [<name>]` | List groups and their members. |
 | `access import` | One-time migration from the old flat `lanpull.access` file (`--from <file>`, `--dry-run`). |
 | `access doctor` | Flag unknown shares, missing files, empty accounts, and stale removals. |
 | `access apply` | Regenerate the manifests after a manual policy edit. |
@@ -183,7 +191,7 @@ when the account is created. A rule that names an unknown share is rejected.
 | `account list` | List accounts with their IP, scope, and effective rules. |
 | `account passwd <name>` | Rotate the password and refresh the staged `auth` file (`--output <dir>`). |
 | `account export <name>` | Copy the staged folder for transfer to the client (`--to <dir>`, `--move`, `--force`, `--dry-run`). |
-| `account arm [<name>...]` | Authorize accounts (or all non-local accounts with `--all`) for a window (`--ttl <duration>`, default `15m`). |
+| `account arm [<name>...]` | Authorize accounts (or groups with `--group`, or all non-local accounts with `--all`) for a window (`--ttl <duration>`, default `15m`). |
 | `account disarm [<name>...]` | Clear arm windows (or every one with `--all`, which prompts unless `--yes`). |
 
 `account add` requires, in order: a staged client bundle (`make install`), at

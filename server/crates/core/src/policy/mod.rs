@@ -21,14 +21,28 @@ use crate::config::{valid_share_name, Config};
 use crate::error::{Error, Result};
 use crate::glob::Glob;
 
-/// The only policy schema version defined so far.
-pub const VERSION: u32 = 1;
+/// The current policy schema version.
+pub const VERSION: u32 = 2;
+
+/// The oldest policy schema version still accepted on load.
+pub const MIN_VERSION: u32 = 1;
+
+/// A named group of accounts (possibly containing other groups).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Group {
+    /// Account or group names that belong to this group.
+    #[serde(default)]
+    pub members: BTreeSet<String>,
+}
 
 /// The whole access policy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Policy {
     /// Schema version.
     pub version: u32,
+    /// Named groups, keyed by group name.
+    #[serde(default)]
+    pub groups: BTreeMap<String, Group>,
     /// Per-share policy, keyed by share name.
     #[serde(default)]
     pub shares: BTreeMap<String, SharePolicy>,
@@ -43,6 +57,9 @@ pub struct SharePolicy {
     /// Per-account deltas.
     #[serde(default)]
     pub clients: BTreeMap<String, Deltas>,
+    /// Per-group deltas.
+    #[serde(default)]
+    pub groups: BTreeMap<String, Deltas>,
 }
 
 /// Per-account additions and removals.
@@ -60,6 +77,7 @@ impl Default for Policy {
     fn default() -> Self {
         Self {
             version: VERSION,
+            groups: BTreeMap::new(),
             shares: BTreeMap::new(),
         }
     }
@@ -94,13 +112,26 @@ impl Policy {
         crate::atomic::write_private(path, &bytes)
     }
 
-    /// Validate the schema version, every share name, and every path.
+    /// Validate the schema version, every share name, every group, and every path.
     pub fn validate(&self) -> Result<()> {
-        if self.version != VERSION {
+        if self.version != VERSION && self.version != MIN_VERSION {
             return Err(Error::Config(format!(
                 "unsupported access policy version {}",
                 self.version
             )));
+        }
+        for name in self.groups.keys() {
+            if !valid_share_name(name) {
+                return Err(Error::Config(format!(
+                    "invalid group name '{name}' in access policy"
+                )));
+            }
+        }
+        // Reject cyclic group membership before it can break expansion.
+        let mut visiting = BTreeSet::new();
+        let mut visited = BTreeSet::new();
+        for name in self.groups.keys() {
+            Self::detect_group_cycle(name, &self.groups, &mut visiting, &mut visited)?;
         }
         for (share, policy) in &self.shares {
             if !valid_share_name(share) {
@@ -119,16 +150,55 @@ impl Policy {
                     validate_path(share, path)?;
                 }
             }
+            for deltas in policy.groups.values() {
+                for path in &deltas.add {
+                    validate_path(share, path)?;
+                }
+                for path in &deltas.remove {
+                    validate_path(share, path)?;
+                }
+            }
         }
         Ok(())
     }
 
+    /// Depth-first cycle detection over group membership.
+    fn detect_group_cycle(
+        name: &str,
+        groups: &BTreeMap<String, Group>,
+        visiting: &mut BTreeSet<String>,
+        visited: &mut BTreeSet<String>,
+    ) -> Result<()> {
+        if visited.contains(name) || !groups.contains_key(name) {
+            return Ok(());
+        }
+        if !visiting.insert(name.to_string()) {
+            return Err(Error::Config(format!(
+                "cyclic group membership at '{name}'"
+            )));
+        }
+        if let Some(group) = groups.get(name) {
+            for member in &group.members {
+                if groups.contains_key(member) {
+                    Self::detect_group_cycle(member, groups, visiting, visited)?;
+                }
+            }
+        }
+        visiting.remove(name);
+        visited.insert(name.to_string());
+        Ok(())
+    }
+
     /// Expand the policy into a flat allow-list for the given accounts.
+    ///
+    /// Group membership is resolved here, so [`Access`] stays keyed by
+    /// account and the request path needs no group awareness.
     pub fn expand(&self, clients: &Clients) -> Result<Access> {
         let mut access = Access::new();
         for (share, policy) in &self.shares {
             for account in clients.iter() {
-                for path in policy.allowed(&account.name) {
+                let (allowed, denied) = policy.effective(&account.name, &self.groups);
+                for path in allowed {
                     let glob = Glob::parse(&path)?;
                     access.add_rule(
                         &account.name,
@@ -138,7 +208,7 @@ impl Policy {
                         },
                     );
                 }
-                for path in policy.denied(&account.name) {
+                for path in denied {
                     let glob = Glob::parse(&path)?;
                     access.deny_rule(
                         &account.name,
@@ -166,13 +236,17 @@ impl Policy {
     /// Unlike [`Policy::expand`], this does not require the account to exist in
     /// the account file: it answers the question `account add` asks before the
     /// account is written, so a `public` rule grants a brand-new account access.
+    /// Group membership is taken into account when the account already belongs
+    /// to a group.
     pub fn has_effective_rules(&self, account: &str) -> bool {
         self.shares
             .values()
-            .any(|share| !share.allowed(account).is_empty())
+            .any(|share| !share.effective(account, &self.groups).0.is_empty())
     }
 
     /// Drop an account's deltas across every share, returning whether any existed.
+    ///
+    /// The account is also removed from every group's membership list.
     pub fn remove_account(&mut self, account: &str) -> bool {
         let mut removed = false;
         for policy in self.shares.values_mut() {
@@ -180,10 +254,159 @@ impl Policy {
                 removed = true;
             }
         }
+        for group in self.groups.values_mut() {
+            group.members.remove(account);
+        }
         // Drop now-empty share policies so the serialized form stays tidy.
-        self.shares
-            .retain(|_, policy| !policy.public.is_empty() || !policy.clients.is_empty());
+        self.shares.retain(|_, policy| {
+            !policy.public.is_empty() || !policy.clients.is_empty() || !policy.groups.is_empty()
+        });
         removed
+    }
+
+    /// Drop a group everywhere, returning whether it existed.
+    pub fn remove_group(&mut self, name: &str) -> bool {
+        let removed = self.groups.remove(name).is_some();
+        for policy in self.shares.values_mut() {
+            policy.groups.remove(name);
+        }
+        for group in self.groups.values_mut() {
+            group.members.remove(name);
+        }
+        // Drop now-empty share policies so the serialized form stays tidy.
+        self.shares.retain(|_, policy| {
+            !policy.public.is_empty() || !policy.clients.is_empty() || !policy.groups.is_empty()
+        });
+        removed
+    }
+
+    /// Return the group names that contain `account` (directly or transitively).
+    pub fn groups_of(&self, account: &str) -> Vec<String> {
+        let mut result = BTreeSet::new();
+        for name in self.groups.keys().cloned() {
+            if self.group_contains(&name, account, &mut BTreeSet::new()) {
+                result.insert(name);
+            }
+        }
+        result.into_iter().collect()
+    }
+
+    /// Return `true` when `group` contains `target` directly or transitively.
+    fn group_contains(&self, group: &str, target: &str, visited: &mut BTreeSet<String>) -> bool {
+        if !visited.insert(group.to_string()) {
+            return false;
+        }
+        if let Some(def) = self.groups.get(group) {
+            if def.members.contains(target) {
+                return true;
+            }
+            for member in &def.members {
+                if self.groups.contains_key(member) && self.group_contains(member, target, visited)
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Return all (transitively) member account names of a group.
+    pub fn members_of(&self, group: &str) -> BTreeSet<String> {
+        let mut result = BTreeSet::new();
+        let mut visited = BTreeSet::new();
+        self.collect_members(group, &mut result, &mut visited);
+        result
+    }
+
+    /// Recursive member collection.
+    fn collect_members(
+        &self,
+        group: &str,
+        result: &mut BTreeSet<String>,
+        visited: &mut BTreeSet<String>,
+    ) {
+        if !visited.insert(group.to_string()) {
+            return;
+        }
+        if let Some(def) = self.groups.get(group) {
+            for member in &def.members {
+                if self.groups.contains_key(member) {
+                    self.collect_members(member, result, visited);
+                } else {
+                    result.insert(member.clone());
+                }
+            }
+        }
+    }
+
+    /// Read-only access to all groups.
+    pub const fn groups(&self) -> &BTreeMap<String, Group> {
+        &self.groups
+    }
+
+    /// Revoke `path` for `principal` on `share`, creating a deny override when
+    /// the path is still reachable through another source (public or a group).
+    pub fn revoke(&mut self, share: &str, principal: &str, path: &str, group: bool) -> Result<()> {
+        let groups = self.groups.clone();
+        let share_policy = self.share_mut(share)?;
+        // Always drop an earlier explicit grant.
+        if group {
+            if let Some(deltas) = share_policy.groups.get_mut(principal) {
+                deltas.add.remove(path);
+            }
+        } else if let Some(deltas) = share_policy.clients.get_mut(principal) {
+            deltas.add.remove(path);
+        }
+        let currently_allowed = share_policy
+            .effective(principal, &groups)
+            .0
+            .iter()
+            .any(|rule| Glob::parse(rule).is_ok_and(|glob| glob.covers(path)));
+        if currently_allowed {
+            let deltas = if group {
+                share_policy
+                    .groups
+                    .entry(principal.to_string())
+                    .or_default()
+            } else {
+                share_policy
+                    .clients
+                    .entry(principal.to_string())
+                    .or_default()
+            };
+            deltas.remove.insert(path.to_string());
+            // Prune empty entries.
+            let empty = deltas.add.is_empty() && deltas.remove.is_empty();
+            // Note: cannot remove here easily after borrow; handle below.
+            let _ = empty;
+        }
+        // Prune empty entries for this principal.
+        if group {
+            let empty = share_policy
+                .groups
+                .get(principal)
+                .is_some_and(|d| d.add.is_empty() && d.remove.is_empty());
+            if empty {
+                share_policy.groups.remove(principal);
+            }
+        } else {
+            let empty = share_policy
+                .clients
+                .get(principal)
+                .is_some_and(|d| d.add.is_empty() && d.remove.is_empty());
+            if empty {
+                share_policy.clients.remove(principal);
+            }
+        }
+        Ok(())
+    }
+
+    /// Mutable access to a group, creating it when absent.
+    pub fn group_mut(&mut self, name: &str) -> Result<&mut Group> {
+        if !valid_share_name(name) {
+            return Err(Error::Config(format!("invalid group name '{name}'")));
+        }
+        Ok(self.groups.entry(name.to_string()).or_default())
     }
 }
 
@@ -216,40 +439,148 @@ impl SharePolicy {
     }
 
     /// Record an addition for an account.
-    ///
-    /// A path already in `public` needs no `add` entry: clearing any earlier
-    /// removal is enough. Otherwise the path joins the account's `add` set.
     pub fn add_for(&mut self, account: &str, path: String) {
-        if self.public.contains(&path) || self.public_covers(&path) {
-            if let Some(deltas) = self.clients.get_mut(account) {
-                deltas.remove.remove(&path);
-            }
-        } else {
-            self.clients
-                .entry(account.to_string())
-                .or_default()
-                .add
-                .insert(path);
+        self.add_for_principal(account, path, false);
+    }
+
+    /// Record an addition for a group.
+    pub fn add_for_group(&mut self, group: &str, path: String) {
+        self.add_for_principal(group, path, true);
+    }
+
+    /// Shared implementation for account and group additions.
+    fn add_for_principal(&mut self, principal: &str, path: String, group: bool) {
+        let covered = self.public.contains(&path) || self.public_covers(&path);
+        let deltas = self.deltas_mut(principal, group);
+        // A grant clears any earlier exclusion of the same path.
+        deltas.remove.remove(&path);
+        if !covered {
+            deltas.add.insert(path);
         }
-        self.prune(account);
+        self.prune_principal(principal, group);
     }
 
     /// Record a removal for an account.
-    ///
-    /// Only a `public` path needs a `remove` entry; a personal `add` path is
-    /// simply dropped. Empty delta entries are pruned.
     pub fn remove_for(&mut self, account: &str, path: &str) {
-        if let Some(deltas) = self.clients.get_mut(account) {
-            deltas.add.remove(path);
-        }
+        self.remove_for_principal(account, path, false);
+    }
+
+    /// Record a removal for a group.
+    pub fn remove_for_group(&mut self, group: &str, path: &str) {
+        self.remove_for_principal(group, path, true);
+    }
+
+    /// Shared implementation for account and group removals.
+    ///
+    /// A removal always drops an earlier explicit `add`. It creates a deny
+    /// entry only when the path is still reachable through `public` (or a
+    /// covering glob); paths reachable only through another principal's grant
+    /// are handled by the caller, which can pass the broader context.
+    fn remove_for_principal(&mut self, principal: &str, path: &str, group: bool) {
+        self.deltas_mut(principal, group).add.remove(path);
         if self.public.contains(path) || self.public_covers(path) {
-            self.clients
-                .entry(account.to_string())
-                .or_default()
+            self.deltas_mut(principal, group)
                 .remove
                 .insert(path.to_string());
         }
-        self.prune(account);
+        self.prune_principal(principal, group);
+    }
+
+    /// Mutable access to a principal's deltas.
+    fn deltas_mut(&mut self, principal: &str, group: bool) -> &mut Deltas {
+        if group {
+            self.groups.entry(principal.to_string()).or_default()
+        } else {
+            self.clients.entry(principal.to_string()).or_default()
+        }
+    }
+
+    /// Prune a principal's empty delta entry.
+    fn prune_principal(&mut self, principal: &str, group: bool) {
+        let empty = if group {
+            self.groups
+                .get(principal)
+                .is_some_and(|deltas| deltas.add.is_empty() && deltas.remove.is_empty())
+        } else {
+            self.clients
+                .get(principal)
+                .is_some_and(|deltas| deltas.add.is_empty() && deltas.remove.is_empty())
+        };
+        if empty {
+            if group {
+                self.groups.remove(principal);
+            } else {
+                self.clients.remove(principal);
+            }
+        }
+    }
+
+    /// Effective allow and deny sets for a principal, including inherited groups.
+    ///
+    /// `groups` is the top-level group map used to resolve membership. Group
+    /// membership is expanded transitively; a cycle is already rejected by
+    /// [`Policy::validate`].
+    pub fn effective(
+        &self,
+        principal: &str,
+        groups: &BTreeMap<String, Group>,
+    ) -> (BTreeSet<String>, BTreeSet<String>) {
+        let mut allow = self.public.clone();
+        let mut deny = BTreeSet::new();
+
+        // The principal's own deltas.
+        for deltas in [self.clients.get(principal), self.groups.get(principal)]
+            .into_iter()
+            .flatten()
+        {
+            for path in &deltas.remove {
+                allow.remove(path);
+                deny.insert(path.clone());
+            }
+            for path in &deltas.add {
+                allow.insert(path.clone());
+            }
+        }
+
+        // Resolve every group that contains the principal, directly or transitively.
+        let mut current: BTreeSet<String> = groups
+            .iter()
+            .filter_map(|(name, def)| {
+                if def.members.contains(principal) {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for (name, def) in groups {
+                if current.contains(name) {
+                    continue;
+                }
+                if def.members.iter().any(|member| current.contains(member))
+                    && current.insert(name.clone())
+                {
+                    changed = true;
+                }
+            }
+        }
+
+        for group in &current {
+            if let Some(deltas) = self.groups.get(group) {
+                for path in &deltas.remove {
+                    allow.remove(path);
+                    deny.insert(path.clone());
+                }
+                for path in &deltas.add {
+                    allow.insert(path.clone());
+                }
+            }
+        }
+
+        (allow, deny)
     }
 
     /// Return `true` when any `public` glob covers the concrete `path`.
@@ -257,17 +588,6 @@ impl SharePolicy {
         self.public
             .iter()
             .any(|rule| Glob::parse(rule).is_ok_and(|glob| glob.covers(path)))
-    }
-
-    /// Drop an account's delta entry when it holds nothing.
-    fn prune(&mut self, account: &str) {
-        let empty = self
-            .clients
-            .get(account)
-            .is_some_and(|deltas| deltas.add.is_empty() && deltas.remove.is_empty());
-        if empty {
-            self.clients.remove(account);
-        }
     }
 }
 
@@ -464,6 +784,7 @@ mod tests {
             SharePolicy {
                 public: BTreeSet::new(),
                 clients: BTreeMap::new(),
+                groups: BTreeMap::new(),
             },
         );
         assert!(policy.validate().is_err());

@@ -11,6 +11,7 @@
 pub mod access;
 pub mod account;
 pub mod config;
+pub mod group;
 pub mod misc;
 pub mod network;
 pub mod output;
@@ -24,6 +25,7 @@ use clap::{Parser, Subcommand};
 use crate::cli::access::AccessCommand;
 use crate::cli::account::AccountCommand;
 use crate::cli::config::ConfigCommand;
+use crate::cli::group::GroupCommand;
 use crate::cli::network::NetworkCommand;
 pub use crate::cli::output::{emit, emit_error, Outcome};
 use crate::cli::service::ServiceCommand;
@@ -72,6 +74,12 @@ pub enum Command {
         #[command(subcommand)]
         command: AccessCommand,
     },
+    /// Manage groups of accounts.
+    Group {
+        /// Group operation.
+        #[command(subcommand)]
+        command: GroupCommand,
+    },
     /// Manage shares and their manifests.
     Share {
         /// Share operation.
@@ -119,6 +127,7 @@ impl Command {
             Self::Status(_) => "status",
             Self::Account { command } => command.path(),
             Self::Access { command } => command.path(),
+            Self::Group { command } => command.path(),
             Self::Share { command } => command.path(),
             Self::Service { command } => command.path(),
             Self::Config { command } => command.path(),

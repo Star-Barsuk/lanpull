@@ -173,6 +173,8 @@ installing user. The canonical layout is:
 ```bash
 lanpull access public add <share>:**                        # everyone sees the whole share
 lanpull access client add <client-name> <share>:<path>      # or one client, one path
+lanpull group create <group-name> && lanpull group member add <group-name> <client-name>
+lanpull access group add <group-name> <share>:<path>        # grant a path to a group
 lanpull access doctor
 
 lanpull account add <client-name> --ip <client-ip> --output <output-dir>
