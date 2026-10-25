@@ -74,6 +74,9 @@ release candidate.
   it twice and compares the hashes.
 - `make -C server test-musl` runs the suite against the musl target, and
   `make -C server fuzz-check` runs stable Clippy over the detached fuzz crate.
+- LLVM coverage profiles are written under `target/coverage-e2e/`; the target
+  cleans the instrumented build and profiles automatically, and
+  `make -C server coverage-clean` removes leftovers.
 - The systemd unit drops all capabilities, uses a `@system-service` syscall
   allowlist, private devices, clock/log protection, and `UMask=0077`
   (`systemd-analyze security` exposure 1.7 OK).
