@@ -288,7 +288,10 @@ make doctor          # toolchain and optional tool status
 make check           # fast static checks on both sides, no tests
 make test-all        # Rust and Python test suites
 make ci              # fast loop: both sides, no e2e or secret scan
+make ci-par          # server and client ci concurrently
 make ci-full         # the gate: secrets, docs, both sides, notices, audit-bin, e2e
+make lint-whitespace # reject whitespace errors in the working diff
+make check-git       # fail when the working tree is not clean
 make -C server e2e   # loopback end-to-end round of the real server and pull.py
 make secrets         # working-tree secret scan (gitleaks or fallback)
 make docs-check      # links, the public/private boundary, the client version
@@ -312,7 +315,8 @@ make hooks           # install the optional pre-push net
 
 Optional advisory tools (not part of the gate): `make -C server
 setup-advisory`, then `nextest`, `hack`, `spell`, `toml-check`, `mutants`,
-`vet`, `bloat`, and `deadlinks`.
+`vet`, `bloat`, and `deadlinks`. `make -C server setup-optional` installs
+`shellcheck`, `gitleaks`, and `testssl.sh` under `~/.local`.
 
 `make setup` installs the Rust target and the pinned gate tools; the client gates
 create their uv-managed `.venv` on the minimum supported Python (3.11) on first

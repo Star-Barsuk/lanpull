@@ -7,7 +7,7 @@
 
 SHELL := /bin/sh
 
-.PHONY: help doctor setup check test-all ci ci-full secrets docs-check check-scripts release release-check release-repro publish publish-draft hooks hooks-uninstall
+.PHONY: help doctor setup check test-all ci ci-par ci-full secrets docs-check check-scripts lint-whitespace check-git release release-check release-repro publish publish-draft hooks hooks-uninstall
 
 help: ## Show available targets
 	@printf 'Server targets:\n'
@@ -19,10 +19,13 @@ help: ## Show available targets
 	@printf '  %-16s %s\n' check "Fast static checks on both sides (no tests)"
 	@printf '  %-16s %s\n' test-all "Run the Rust and Python test suites"
 	@printf '  %-16s %s\n' ci "Fast loop: static checks and both test suites"
+	@printf '  %-16s %s\n' ci-par "Run server and client ci concurrently"
 	@printf '  %-16s %s\n' ci-full "The gate: ci, notices, audit-bin, e2e, secrets, docs"
 	@printf '  %-16s %s\n' secrets "Scan the working tree for credentials (gitleaks or fallback)"
 	@printf '  %-16s %s\n' docs-check "Check links, the public/private boundary, and the version"
 	@printf '  %-16s %s\n' check-scripts "Parse and lint the repository shell scripts"
+	@printf '  %-16s %s\n' lint-whitespace "Reject whitespace errors in the working diff"
+	@printf '  %-16s %s\n' check-git "Fail when the working tree is not clean"
 	@printf '  %-16s %s\n' release "Build the release archive (does not tag)"
 	@printf '  %-16s %s\n' release-check "Rehearse the release layout from the working tree"
 	@printf '  %-16s %s\n' release-repro "Build the archive twice and compare the hashes"
@@ -53,6 +56,14 @@ ci: check-scripts ## Run every quality and security gate on both sides
 	@$(MAKE) --no-print-directory -C server ci
 	@$(MAKE) --no-print-directory -C client ci
 
+ci-par: check-scripts ## Run server and client ci concurrently
+	@srv=0; cli=0; \
+	$(MAKE) --no-print-directory -C server ci & s=$$!; \
+	$(MAKE) --no-print-directory -C client ci & c=$$!; \
+	wait $$s || srv=1; \
+	wait $$c || cli=1; \
+	[ $$srv -eq 0 ] && [ $$cli -eq 0 ]
+
 # The single gate named in the project rules: cheap checks first, then the full suite,
 # then the release-binary audit and the loopback end-to-end round. The full gate
 # requires the real secret and shell linters; the fast loop keeps the fallbacks.
@@ -69,6 +80,16 @@ docs-check: ## Check links, the public/private boundary, and the version
 
 check-scripts: ## Parse and lint the repository shell scripts
 	@scripts/check-scripts.sh
+
+lint-whitespace: ## Reject whitespace errors in the working diff
+	@git diff --check
+
+check-git: ## Fail when the working tree is not clean
+	@test -z "$$(git status --porcelain)" || { \
+		echo "lanpull: the working tree is not clean" >&2; \
+		git status --short >&2; \
+		exit 1; \
+	}
 
 release: ## Build the release archive (does not tag)
 	@scripts/release.sh

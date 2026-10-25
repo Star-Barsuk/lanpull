@@ -25,6 +25,7 @@ target/
 *.profraw
 mutants.out/
 mutants.out.old/
+server/.tools-stamp
 
 # --- Python ---------------------------------------------------------------
 __pycache__/
