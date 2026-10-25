@@ -1,0 +1,10 @@
+# Taplo configuration for `make toml-check`.
+# Only project manifests and configuration templates are checked; generated
+# and vendored trees are excluded.
+include = ["**/*.toml"]
+exclude = ["target/**", "dist/**", "tools/**", "client/.venv/**", "server/target/**", "server/fuzz/target/**"]
+
+[formatting]
+align_entries = false
+indent_string = "    "
+column_width = 120

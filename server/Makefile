@@ -44,6 +44,9 @@ TOOLS_STAMP := target/.gate-tools
 GATE_TOOLS     := cargo-audit@0.22.2 cargo-deny@0.20.2 \
 	cargo-auditable@0.7.7 cargo-machete@0.9.2 cargo-about@0.9.2
 ADVISORY_TOOLS := cargo-geiger@0.13.0
+ADVISORY_TOOL_VERSIONS := typos-cli@1.51.1 taplo-cli@0.10.0 \
+	cargo-nextest@0.9.149 cargo-hack@0.6.45 cargo-mutants@27.1.0 \
+	cargo-vet@0.10.3 cargo-bloat@0.12.1 cargo-deadlinks@0.8.1
 TOOL_VERSIONS  := $(GATE_TOOLS) $(ADVISORY_TOOLS)
 BINARY       := target/$(TARGET)/release/lanpull
 BINARY_DEBUG := target/debug/lanpull
@@ -71,10 +74,11 @@ UNINSTALL_CMD = $(SCRIPTS)/uninstall.sh --binary "$(LANPULL)" --unit "$(UNIT)" \
 	--state-dir "$(STATE_DIR_ABS)" --conf-dir "$(CONFIG_DIR_ABS)" \
 	--service "$(SERVICE)"
 
-.PHONY: help doctor setup build build-debug install uninstall wipe \
+.PHONY: help doctor setup setup-advisory build build-debug install uninstall wipe \
         clean distclean confirm check-tools check-build-tools check-scripts check-core guard-test cli-test e2e dast load soak \
         release-setup licenses licenses-check msrv \
-        fmt fmt-check lint doc test test-musl check-targets coverage coverage-e2e coverage-clean bench fuzz fuzz-check machete deny audit audit-bin audit-config geiger security ci
+        fmt fmt-check lint doc test test-musl check-targets coverage coverage-e2e coverage-clean bench fuzz fuzz-check machete deny audit audit-bin audit-config geiger security ci \
+        nextest hack spell toml-check mutants mutants-list vet vet-init bloat deadlinks
 
 help: ## Show available targets
 	@$(SCRIPTS)/help.sh
@@ -104,6 +108,13 @@ doctor: ## Print the toolchain and optional tool status
 			printf '  %-20s missing (optional or full-gate tool)\n' "$$name"; \
 		fi; \
 	done
+	@for name in typos taplo cargo-nextest cargo-hack cargo-mutants cargo-vet cargo-bloat cargo-deadlinks; do \
+		if command -v $$name >/dev/null 2>&1; then \
+			printf '  %-20s present (advisory)\n' "$$name"; \
+		else \
+			printf '  %-20s missing (advisory)\n' "$$name"; \
+		fi; \
+	done
 
 setup: ## Install the Rust target and the pinned quality-gate tools
 	$(RUSTUP) target add $(TARGET)
@@ -124,6 +135,12 @@ setup: ## Install the Rust target and the pinned quality-gate tools
 		done; \
 		printf '%s\n' "$(TOOL_VERSIONS)" > "$(TOOLS_STAMP)"; \
 	fi
+
+setup-advisory: ## Install the optional static/quality tools (not part of the gate)
+	@for tool in $(ADVISORY_TOOL_VERSIONS); do \
+		echo "lanpull: installing $$tool"; \
+		$(CARGO) install --locked $$tool || exit 1; \
+	done
 
 build: check-build-tools ## Build the static server binary with embedded dependency metadata
 	$(CARGO) auditable build --release --locked --target $(TARGET)
@@ -267,6 +284,56 @@ test-musl: check-build-tools ## Run the test suite against the musl target
 
 check-targets: ## Compile tests, benches, and examples without running them
 	$(CARGO) test --locked --workspace --all-targets --no-run
+
+nextest: ## Run tests through cargo-nextest (advisory; not a gate)
+	@command -v cargo-nextest >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-nextest; install it with 'cargo install --locked cargo-nextest'" >&2; exit 1; }
+	$(CARGO) nextest run --locked --workspace
+
+hack: ## Check the feature matrix with cargo-hack (advisory; not a gate)
+	@command -v cargo-hack >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-hack; install it with 'cargo install --locked cargo-hack'" >&2; exit 1; }
+	$(CARGO) hack check --workspace --each-feature --all-targets
+
+spell: ## Check spelling with typos (advisory; not a gate)
+	@command -v typos >/dev/null 2>&1 || { \
+		echo "lanpull: missing typos; install it with 'cargo install --locked typos-cli'" >&2; exit 1; }
+	@cd "$(abspath ..)" && typos
+
+toml-check: ## Check TOML formatting with taplo (advisory; not a gate)
+	@command -v taplo >/dev/null 2>&1 || { \
+		echo "lanpull: missing taplo; install it with 'cargo install --locked taplo-cli'" >&2; exit 1; }
+	@cd "$(abspath ..)" && taplo fmt --check
+
+mutants-list: ## List cargo-mutants candidates (advisory; not a gate)
+	@command -v cargo-mutants >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-mutants; install it with 'cargo install --locked cargo-mutants'" >&2; exit 1; }
+	$(CARGO) mutants --list --workspace
+
+mutants: ## Run cargo-mutants over the workspace (advisory; slow)
+	@command -v cargo-mutants >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-mutants; install it with 'cargo install --locked cargo-mutants'" >&2; exit 1; }
+	$(CARGO) mutants --workspace
+
+vet-init: ## Initialize the cargo-vet supply-chain policy (one-time)
+	@command -v cargo-vet >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-vet; install it with 'cargo install --locked cargo-vet'" >&2; exit 1; }
+	$(CARGO) vet init
+
+vet: ## Audit supply-chain trust with cargo-vet (advisory; not a gate)
+	@command -v cargo-vet >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-vet; install it with 'cargo install --locked cargo-vet'" >&2; exit 1; }
+	$(CARGO) vet --locked
+
+bloat: build ## Report binary size by crate (advisory; not a gate)
+	@command -v cargo-bloat >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-bloat; install it with 'cargo install --locked cargo-bloat'" >&2; exit 1; }
+	$(CARGO) bloat --release --target $(TARGET) --crates
+
+deadlinks: doc ## Check rustdoc links with cargo-deadlinks (advisory; not a gate)
+	@command -v cargo-deadlinks >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-deadlinks; install it with 'cargo install --locked cargo-deadlinks'" >&2; exit 1; }
+	$(CARGO) deadlinks --dir target/doc
 
 msrv: ## Check the declared MSRV (requires the MSRV toolchain)
 	@$(RUSTUP) toolchain list | grep -q "^$(MSRV)" || { \

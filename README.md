@@ -310,6 +310,10 @@ make release-repro   # build the archive twice and compare the hashes
 make hooks           # install the optional pre-push net
 ```
 
+Optional advisory tools (not part of the gate): `make -C server
+setup-advisory`, then `nextest`, `hack`, `spell`, `toml-check`, `mutants`,
+`vet`, `bloat`, and `deadlinks`.
+
 `make setup` installs the Rust target and the pinned gate tools; the client gates
 create their uv-managed `.venv` on the minimum supported Python (3.11) on first
 run (`make -C client setup`), from the hash-locked `requirements-dev.txt`. The
