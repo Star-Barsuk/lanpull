@@ -32,7 +32,7 @@ RUSTC       ?= $(if $(wildcard $(CARGO_BIN)/rustc),$(CARGO_BIN)/rustc,rustc)
 RUSTUP      ?= $(if $(wildcard $(CARGO_BIN)/rustup),$(CARGO_BIN)/rustup,rustup)
 TARGET      ?= x86_64-unknown-linux-musl
 MSRV        ?= 1.88.0
-TOOLS_STAMP := target/.gate-tools
+TOOLS_STAMP := .tools-stamp
 # Note: `clippy`, `test`, and `doc` run against the host toolchain (fast); the
 # supply-chain gates (`deny`, `audit`) analyze the musl build graph, matching
 # what `build` produces. A feature available only on one target could in
@@ -63,6 +63,12 @@ CLIENT_DIR     ?= ../client
 STATE_DIR      ?= /var/lib/lanpull
 STATE_DIR_ABS  := $(abspath $(STATE_DIR))
 CONFIG_DIR_ABS := $(abspath $(CONFIG_DIR))
+OPTIONAL_BIN   ?= $(LANPULL_HOME)/.local/bin
+OPTIONAL_SHARE ?= $(LANPULL_HOME)/.local/share
+SHELLCHECK_VERSION ?= v0.11.0
+GITLEAKS_VERSION   ?= v8.30.1
+GITLEAKS_ASSET_VERSION := $(patsubst v%,%,$(GITLEAKS_VERSION))
+TESTSSL_REF        ?= v3.2.4
 
 CONFIRM ?=
 
@@ -74,7 +80,7 @@ UNINSTALL_CMD = $(SCRIPTS)/uninstall.sh --binary "$(LANPULL)" --unit "$(UNIT)" \
 	--state-dir "$(STATE_DIR_ABS)" --conf-dir "$(CONFIG_DIR_ABS)" \
 	--service "$(SERVICE)"
 
-.PHONY: help doctor setup setup-advisory build build-debug install uninstall wipe \
+.PHONY: help doctor setup setup-advisory setup-optional build build-debug install uninstall wipe \
         clean distclean confirm check-tools check-build-tools check-scripts check-core guard-test cli-test e2e dast load soak \
         release-setup licenses licenses-check msrv \
         fmt fmt-check lint doc test test-musl check-targets coverage coverage-e2e coverage-clean bench fuzz fuzz-check machete deny audit audit-bin audit-config geiger security ci \
@@ -118,7 +124,6 @@ doctor: ## Print the toolchain and optional tool status
 
 setup: ## Install the Rust target and the pinned quality-gate tools
 	$(RUSTUP) target add $(TARGET)
-	@mkdir -p target
 	@if [ -f "$(TOOLS_STAMP)" ] && [ "$$(cat "$(TOOLS_STAMP)")" = "$(TOOL_VERSIONS)" ] \
 		&& $(MAKE) --no-print-directory check-tools >/dev/null 2>&1 \
 		&& (for spec in $(TOOL_VERSIONS); do \
@@ -141,6 +146,37 @@ setup-advisory: ## Install the optional static/quality tools (not part of the ga
 		echo "lanpull: installing $$tool"; \
 		$(CARGO) install --locked $$tool || exit 1; \
 	done
+
+setup-optional: ## Install shellcheck, gitleaks, and testssl.sh user-locally
+	@command -v curl >/dev/null 2>&1 || { echo "lanpull: curl is required" >&2; exit 1; }
+	@mkdir -p "$(OPTIONAL_BIN)" "$(OPTIONAL_SHARE)"
+	@if command -v shellcheck >/dev/null 2>&1; then \
+		echo "lanpull: shellcheck already present"; \
+	else \
+		echo "lanpull: installing shellcheck $(SHELLCHECK_VERSION)"; \
+		tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+		curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/$(SHELLCHECK_VERSION)/shellcheck-$(SHELLCHECK_VERSION).linux.x86_64.tar.xz" \
+			| tar -xJ -C "$$tmp"; \
+		install -m755 "$$tmp/shellcheck-$(SHELLCHECK_VERSION)/shellcheck" "$(OPTIONAL_BIN)/shellcheck"; \
+	fi
+	@if command -v gitleaks >/dev/null 2>&1; then \
+		echo "lanpull: gitleaks already present"; \
+	else \
+		echo "lanpull: installing gitleaks $(GITLEAKS_VERSION)"; \
+		tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+		curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/$(GITLEAKS_VERSION)/gitleaks_$(GITLEAKS_ASSET_VERSION)_linux_x64.tar.gz" \
+			| tar -xz -C "$$tmp"; \
+		install -m755 "$$tmp/gitleaks" "$(OPTIONAL_BIN)/gitleaks"; \
+	fi
+	@if [ -x "$(OPTIONAL_SHARE)/testssl.sh/testssl.sh" ]; then \
+		echo "lanpull: testssl.sh already present"; \
+	else \
+		echo "lanpull: installing testssl.sh ($(TESTSSL_REF))"; \
+		git clone --depth 1 --branch "$(TESTSSL_REF)" \
+			https://github.com/drwetter/testssl.sh "$(OPTIONAL_SHARE)/testssl.sh"; \
+	fi
+	@ln -sfn "$(OPTIONAL_SHARE)/testssl.sh/testssl.sh" "$(OPTIONAL_BIN)/testssl.sh"
+	@echo "lanpull: optional tools are in $(OPTIONAL_BIN); add it to PATH if needed"
 
 build: check-build-tools ## Build the static server binary with embedded dependency metadata
 	$(CARGO) auditable build --release --locked --target $(TARGET)
@@ -228,16 +264,8 @@ check-core: ## Enforce that lanpull-core stays free of the HTTP stack
 		fi; \
 	done
 
-check-scripts: ## Parse the server shell scripts (shellcheck runs when installed)
-	@for script in $(SCRIPTS)/*.sh; do sh -n "$$script" || exit 1; done
-	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -x -s sh -P $(SCRIPTS) $(SCRIPTS)/*.sh || exit 1; \
-	elif [ "$${REQUIRE_SHELLCHECK:-0}" = "1" ]; then \
-		echo "lanpull: shellcheck is required by the full gate; install it and re-run" >&2; \
-		exit 1; \
-	else \
-		echo "lanpull: shellcheck not installed; linting the scripts by 'sh -n' only" >&2; \
-	fi
+check-scripts: ## Parse the server shell scripts through the shared checker
+	@cd .. && scripts/check-scripts.sh server/$(SCRIPTS)
 
 guard-test: ## Run negative safety tests for the privileged scripts
 	$(SCRIPTS)/guard_test.sh

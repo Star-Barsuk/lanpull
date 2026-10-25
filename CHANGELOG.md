@@ -79,7 +79,11 @@ release candidate.
   `make -C server coverage-clean` removes leftovers.
 - An optional advisory layer (`setup-advisory`, `nextest`, `hack`, `spell`,
   `toml-check`, `mutants`, `vet`, `bloat`, `deadlinks`) from common Rust
-  practice is available without changing the blocking gate.
+  practice is available without changing the blocking gate. `setup-optional`
+  installs shellcheck, gitleaks, and testssl.sh under `~/.local`.
+- The server and repository script check now share one implementation;
+  `make ci-par` runs both halves concurrently, and `make lint-whitespace` /
+  `make check-git` cover diff hygiene and a clean tree.
 - The systemd unit drops all capabilities, uses a `@system-service` syscall
   allowlist, private devices, clock/log protection, and `UMask=0077`
   (`systemd-analyze security` exposure 1.7 OK).
