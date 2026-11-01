@@ -16,8 +16,8 @@ set -eu
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 
-printf 'pre-push: fmt-check, clippy, cargo-deny, ruff, scripts, secrets, docs-check\n' >&2
-make -C server fmt-check lint deny
+printf 'pre-push: komainu check, ruff, scripts, secrets, docs-check\n' >&2
+KANTEI_BIN="${HOME}/.cargo/bin/kantei" "${HOME}/.cargo/bin/komainu" run check
 make -C client lint
 make check-scripts
 make secrets

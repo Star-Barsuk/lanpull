@@ -1,123 +1,482 @@
-# lanpull root Makefile.
+# lanpull server Makefile.
+# Thin dispatcher: one target per operation. Non-trivial, privileged, or
+# destructive logic lives in scripts/ and is invoked from one-line recipes.
 #
-# Thin forwarder. Server targets are reachable as-is, client targets are
-# prefixed with `client-` (for example `make client-lint`), and `ci`/`setup`
-# run both sides. The target list is not duplicated here: `help` asks each
-# side, so the surface cannot drift.
+# This Makefile only works with the source tree: it builds the binary, installs
+# it, and runs the quality gates. It never generates a configuration. After
+# `make install`, the operator drives the server with the installed `lanpull`
+# binary (see the `lanpull --help` tree); the configuration is created by
+# `sudo lanpull init`.
+#
+# The Makefile locates the Rust toolchain itself ($CARGO_HOME/bin), so the
+# documented commands work without editing PATH first.
 
 SHELL := /bin/sh
 
-.PHONY: help doctor setup check test-all ci ci-par ci-full secrets docs-check check-scripts lint-whitespace check-git release release-check release-repro publish publish-draft hooks hooks-uninstall
+# --- Toolchain (self-locating) -------------------------------------------
+# Under sudo, HOME may be root's, so resolve the invoking user's home (the
+# Makefile already reads SUDO_USER for OPERATOR). CARGO_HOME and RUSTUP_HOME are
+# exported so a privileged invocation uses the invoking user's toolchain instead
+# of creating a second one under /root. Prefer a plain `make install` (the
+# install script escalates only the file-system steps) over `sudo make install`:
+# a build performed as root would leave root-owned files in target/.
+LANPULL_HOME ?= $(if $(SUDO_USER),$(shell getent passwd $(SUDO_USER) | cut -d: -f6),$(HOME))
+CARGO_HOME  ?= $(LANPULL_HOME)/.cargo
+export CARGO_HOME
+RUSTUP_HOME ?= $(LANPULL_HOME)/.rustup
+export RUSTUP_HOME
+CARGO_BIN   := $(CARGO_HOME)/bin
+export PATH := $(CARGO_BIN):$(PATH)
+CARGO       ?= $(if $(wildcard $(CARGO_BIN)/cargo),$(CARGO_BIN)/cargo,cargo)
+RUSTC       ?= $(if $(wildcard $(CARGO_BIN)/rustc),$(CARGO_BIN)/rustc,rustc)
+RUSTUP      ?= $(if $(wildcard $(CARGO_BIN)/rustup),$(CARGO_BIN)/rustup,rustup)
+TARGET      ?= x86_64-unknown-linux-musl
+MSRV        ?= 1.88.0
+TOOLS_STAMP := .tools-stamp
+# Note: `clippy`, `test`, and `doc` run against the host toolchain (fast); the
+# supply-chain gates (`deny`, `audit`) analyze the musl build graph, matching
+# what `build` produces. A feature available only on one target could in
+# principle differ, so the release binary stays validated by `e2e`/`audit-bin`.
+# Quality-gate tools installed by `setup`. Versions are pinned so the gates are
+# reproducible; bump a version here deliberately (TOOL_VERSIONS), never inline.
+# `cargo-geiger` is an advisory inventory: it is installed by `setup` but is
+# not part of `ci`, so `check-tools` does not require it.
+GATE_TOOLS     := cargo-audit@0.22.2 cargo-deny@0.20.2 \
+	cargo-auditable@0.7.7 cargo-machete@0.9.2 cargo-about@0.9.2
+ADVISORY_TOOLS := cargo-geiger@0.13.0
+ADVISORY_TOOL_VERSIONS := typos-cli@1.51.1 taplo-cli@0.10.0 \
+	cargo-nextest@0.9.149 cargo-hack@0.6.45 cargo-mutants@27.1.0 \
+	cargo-vet@0.10.3 cargo-bloat@0.12.1 cargo-deadlinks@0.8.1
+TOOL_VERSIONS  := $(GATE_TOOLS) $(ADVISORY_TOOLS)
+BINARY       := target/$(TARGET)/release/lanpull
+BINARY_DEBUG := target/debug/lanpull
+
+# --- Install locations ---------------------------------------------------
+BIN_DIR        ?= /usr/local/bin
+LANPULL        ?= $(BIN_DIR)/lanpull
+SERVICE        ?= lanpull.service
+UNIT           ?= /etc/systemd/system/$(SERVICE)
+CONFIG_DIR     ?= /etc/lanpull
+OPERATOR       ?= $(if $(SUDO_USER),$(SUDO_USER),$(shell id -un))
+OPERATOR_GROUP ?= $(shell id -gn $(OPERATOR) 2>/dev/null || id -gn)
+CLIENT_DIR     ?= client
+STATE_DIR      ?= /var/lib/lanpull
+STATE_DIR_ABS  := $(abspath $(STATE_DIR))
+CONFIG_DIR_ABS := $(abspath $(CONFIG_DIR))
+OPTIONAL_BIN   ?= $(LANPULL_HOME)/.local/bin
+OPTIONAL_SHARE ?= $(LANPULL_HOME)/.local/share
+SHELLCHECK_VERSION ?= v0.11.0
+GITLEAKS_VERSION   ?= v8.30.1
+GITLEAKS_ASSET_VERSION := $(patsubst v%,%,$(GITLEAKS_VERSION))
+TESTSSL_REF        ?= v3.2.4
+
+CONFIRM ?=
+
+SCRIPTS := scripts
+CRATE_DIR := crates
+CRATES    := core store http cli
+
+UNINSTALL_CMD = $(SCRIPTS)/uninstall.sh --binary "$(LANPULL)" --unit "$(UNIT)" \
+	--state-dir "$(STATE_DIR_ABS)" --conf-dir "$(CONFIG_DIR_ABS)" \
+	--service "$(SERVICE)"
+
+.PHONY: help doctor setup setup-advisory setup-optional build build-debug install uninstall wipe \
+        clean distclean confirm check-tools check-build-tools check-scripts check-core guard-test cli-test e2e dast load soak \
+        release-setup licenses licenses-check msrv \
+        test-musl coverage coverage-e2e coverage-clean bench fuzz fuzz-check audit audit-bin geiger security \
+        nextest hack mutants mutants-list vet vet-init bloat deadlinks
 
 help: ## Show available targets
-	@printf 'Server targets:\n'
-	@$(MAKE) --no-print-directory -C server help
-	@printf '\nClient targets (make client-<target>):\n'
-	@$(MAKE) --no-print-directory -C client help
-	@printf '\nOther:\n'
-	@printf '  %-16s %s\n' doctor "Print toolchain and optional tool status"
-	@printf '  %-16s %s\n' check "Fast static checks on both sides (no tests)"
-	@printf '  %-16s %s\n' test-all "Run the Rust and Python test suites"
-	@printf '  %-16s %s\n' ci "Fast loop: static checks and both test suites"
-	@printf '  %-16s %s\n' ci-par "Run server and client ci concurrently"
-	@printf '  %-16s %s\n' ci-full "The gate: ci, notices, audit-bin, e2e, secrets, docs"
-	@printf '  %-16s %s\n' secrets "Scan the working tree for credentials (gitleaks or fallback)"
-	@printf '  %-16s %s\n' docs-check "Check links, the public/private boundary, and the version"
-	@printf '  %-16s %s\n' check-scripts "Parse and lint the repository shell scripts"
-	@printf '  %-16s %s\n' lint-whitespace "Reject whitespace errors in the working diff"
-	@printf '  %-16s %s\n' check-git "Fail when the working tree is not clean"
-	@printf '  %-16s %s\n' release "Build the release archive (does not tag)"
-	@printf '  %-16s %s\n' release-check "Rehearse the release layout from the working tree"
-	@printf '  %-16s %s\n' release-repro "Build the archive twice and compare the hashes"
-	@printf '  %-16s %s\n' publish "Publish the release to GitHub (needs gh auth and a tag)"
-	@printf '  %-16s %s\n' publish-draft "Publish the release as a draft for review"
-	@printf '  %-16s %s\n' hooks "Install the pre-push hook (fast gates and secret scan)"
-	@printf '  %-16s %s\n' hooks-uninstall "Remove the pre-push hook"
-	@printf '  %-16s %s\n' setup "Install both toolchains"
+	@$(SCRIPTS)/help.sh
 
-doctor: ## Print toolchain and optional tool status
-	@$(MAKE) --no-print-directory -C server doctor
-	@printf '\n'
-	@$(MAKE) --no-print-directory -C client doctor
+doctor: ## Print the toolchain and optional tool status
+	@printf 'server:\n'
+	@printf '  cargo:    '; $(CARGO) --version
+	@printf '  rustc:    '; $(RUSTC) --version 2>/dev/null || echo missing
+	@printf '  rustup:   '; $(RUSTUP) show active-toolchain 2>/dev/null || echo missing
+	@printf '  target:   '; $(RUSTUP) target list --installed 2>/dev/null | grep -qx '$(TARGET)' && echo '$(TARGET) installed' || echo '$(TARGET) missing'
+	@for spec in $(TOOL_VERSIONS); do \
+		name=$${spec%@*}; \
+		if command -v $$name >/dev/null 2>&1; then \
+			if [ "$$name" = "cargo-auditable" ]; then \
+				printf '  %-20s %s\n' "$$name" "present"; \
+			else \
+				printf '  %-20s %s\n' "$$name" "$$($$name --version 2>/dev/null | head -n 1)"; \
+			fi; \
+		else \
+			printf '  %-20s missing\n' "$$name"; \
+		fi; \
+	done
+	@for name in shellcheck gitleaks testssl.sh git; do \
+		if command -v $$name >/dev/null 2>&1; then \
+			printf '  %-20s present\n' "$$name"; \
+		else \
+			printf '  %-20s missing (optional or full-gate tool)\n' "$$name"; \
+		fi; \
+	done
+	@for name in typos taplo cargo-nextest cargo-hack cargo-mutants cargo-vet cargo-bloat cargo-deadlinks; do \
+		if command -v $$name >/dev/null 2>&1; then \
+			printf '  %-20s present (advisory)\n' "$$name"; \
+		else \
+			printf '  %-20s missing (advisory)\n' "$$name"; \
+		fi; \
+	done
 
-setup: ## Install both toolchains
-	@$(MAKE) --no-print-directory -C server setup
-	@$(MAKE) --no-print-directory -C client setup
+setup: ## Install the Rust target and the pinned quality-gate tools
+	$(RUSTUP) target add $(TARGET)
+	@if [ -f "$(TOOLS_STAMP)" ] && [ "$$(cat "$(TOOLS_STAMP)")" = "$(TOOL_VERSIONS)" ] \
+		&& $(MAKE) --no-print-directory check-tools >/dev/null 2>&1 \
+		&& (for spec in $(TOOL_VERSIONS); do \
+			name=$${spec%@*}; command -v $$name >/dev/null 2>&1 || exit 1; \
+		done); then \
+		echo "lanpull: gate tools already installed"; \
+	else \
+		for tool in $(TOOL_VERSIONS); do \
+			echo "lanpull: installing $$tool"; \
+			case "$$tool" in \
+				cargo-about@*) $(CARGO) install --locked --features cli $$tool || exit 1 ;; \
+				*) $(CARGO) install --locked $$tool || exit 1 ;; \
+			esac; \
+		done; \
+		printf '%s\n' "$(TOOL_VERSIONS)" > "$(TOOLS_STAMP)"; \
+	fi
 
-check: check-scripts ## Run the fast static checks on both sides
-	@$(MAKE) --no-print-directory -C server check-tools check-scripts check-core fmt-check machete lint
+setup-advisory: ## Install the optional static/quality tools (not part of the gate)
+	@for tool in $(ADVISORY_TOOL_VERSIONS); do \
+		echo "lanpull: installing $$tool"; \
+		$(CARGO) install --locked $$tool || exit 1; \
+	done
+
+setup-optional: ## Install shellcheck, gitleaks, and testssl.sh user-locally
+	@command -v curl >/dev/null 2>&1 || { echo "lanpull: curl is required" >&2; exit 1; }
+	@mkdir -p "$(OPTIONAL_BIN)" "$(OPTIONAL_SHARE)"
+	@if command -v shellcheck >/dev/null 2>&1; then \
+		echo "lanpull: shellcheck already present"; \
+	else \
+		echo "lanpull: installing shellcheck $(SHELLCHECK_VERSION)"; \
+		tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+		curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/$(SHELLCHECK_VERSION)/shellcheck-$(SHELLCHECK_VERSION).linux.x86_64.tar.xz" \
+			| tar -xJ -C "$$tmp"; \
+		install -m755 "$$tmp/shellcheck-$(SHELLCHECK_VERSION)/shellcheck" "$(OPTIONAL_BIN)/shellcheck"; \
+	fi
+	@if command -v gitleaks >/dev/null 2>&1; then \
+		echo "lanpull: gitleaks already present"; \
+	else \
+		echo "lanpull: installing gitleaks $(GITLEAKS_VERSION)"; \
+		tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+		curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/$(GITLEAKS_VERSION)/gitleaks_$(GITLEAKS_ASSET_VERSION)_linux_x64.tar.gz" \
+			| tar -xz -C "$$tmp"; \
+		install -m755 "$$tmp/gitleaks" "$(OPTIONAL_BIN)/gitleaks"; \
+	fi
+	@if [ -x "$(OPTIONAL_SHARE)/testssl.sh/testssl.sh" ]; then \
+		echo "lanpull: testssl.sh already present"; \
+	else \
+		echo "lanpull: installing testssl.sh ($(TESTSSL_REF))"; \
+		git clone --depth 1 --branch "$(TESTSSL_REF)" \
+			https://github.com/drwetter/testssl.sh "$(OPTIONAL_SHARE)/testssl.sh"; \
+	fi
+	@ln -sfn "$(OPTIONAL_SHARE)/testssl.sh/testssl.sh" "$(OPTIONAL_BIN)/testssl.sh"
+	@echo "lanpull: optional tools are in $(OPTIONAL_BIN); add it to PATH if needed"
+
+build: check-build-tools ## Build the static server binary with embedded dependency metadata
+	$(CARGO) auditable build --release --locked --target $(TARGET)
+
+build-debug: check-build-tools ## Build the host debug binary for the CLI test
+	$(CARGO) build --locked
+
+check-build-tools:
+	@command -v $(CARGO) >/dev/null 2>&1 || { \
+		echo "lanpull: cargo is missing; install Rust and re-run 'make setup'" >&2; exit 1; }
+	@$(CARGO) auditable --help >/dev/null 2>&1 || { \
+		echo "lanpull: cargo-auditable is missing; run 'make setup'" >&2; exit 1; }
+	@$(RUSTUP) target list --installed 2>/dev/null | grep -qx '$(TARGET)' || { \
+		echo "lanpull: Rust target $(TARGET) is missing; run 'make setup'" >&2; exit 1; }
+
+install: build ## Install the binary, unit, config dir, and client bundle
+	$(SCRIPTS)/install.sh \
+		--binary "$(BINARY)" --bin-dir "$(BIN_DIR)" \
+		--unit-src "$(abspath ./systemd/lanpull.service)" --unit-dest "$(UNIT)" \
+		--state-dir "$(STATE_DIR_ABS)" --operator "$(OPERATOR)" \
+		--group "$(OPERATOR_GROUP)" --conf-dir "$(CONFIG_DIR_ABS)" \
+		--client-dir "$(CLIENT_DIR)"
+
+uninstall: confirm ## Remove the binary, unit, /etc/lanpull, and state (CONFIRM=1)
+	$(UNINSTALL_CMD)
+
+wipe: confirm ## Remove everything lanpull created (CONFIRM=1)
+	$(MAKE) distclean CONFIRM=1
+	$(UNINSTALL_CMD)
+
+clean: ## Remove build artifacts and caches (no root)
+	$(CARGO) clean
+	rm -f ./*.profraw
+	@if [ -d "$(CLIENT_DIR)" ]; then \
+		$(MAKE) -C $(CLIENT_DIR) clean; \
+	else \
+		echo "lanpull: skipping client clean (no $(CLIENT_DIR))" >&2; \
+	fi
+
+confirm:
+	@if [ "$(CONFIRM)" != "1" ]; then \
+		echo "lanpull: this target deletes configuration, credentials, and/or state."; \
+		echo "         re-run with CONFIRM=1 to proceed."; \
+		exit 1; \
+	fi
+
+distclean: confirm ## Remove build artifacts and repository runtime leftovers (CONFIRM=1)
+	$(MAKE) clean
+	$(SCRIPTS)/distclean.sh .
+
+check-tools: check-build-tools
+	@for spec in $(GATE_TOOLS); do \
+		name=$${spec%@*}; want=$${spec#*@}; \
+		command -v $$name >/dev/null 2>&1 || { \
+			echo "lanpull: missing $$name; run 'make setup'" >&2; exit 1; \
+		}; \
+		if [ "$$name" = "cargo-auditable" ]; then \
+			$(CARGO) install --list 2>/dev/null | grep -q "$$name v$$want" || { \
+				echo "lanpull: $$name $$want is not installed; run 'make setup'" >&2; exit 1; \
+			}; \
+			continue; \
+		fi; \
+		got=$$($$name --version 2>/dev/null | awk '{print $$NF}'); \
+		if [ "$$got" != "$$want" ]; then \
+			echo "lanpull: $$name $$got is installed, want $$want; run 'make setup'" >&2; \
+			exit 1; \
+		fi; \
+	done
+
+check-core: ## Enforce that lanpull-core stays free of the HTTP stack
+	@deps=$$($(CARGO) tree -p lanpull-core --edges all --prefix none) || { \
+		echo "lanpull: cargo tree failed; cannot verify lanpull-core" >&2; exit 1; }; \
+	if printf '%s\n' "$$deps" | grep -Eq '^(axum|axum-server|tower|tower-http|hyper|hyper-util) v'; then \
+		echo "lanpull: lanpull-core must not depend on the HTTP stack" >&2; \
+		printf '%s\n' "$$deps" | grep -E '^(axum|axum-server|tower|tower-http|hyper|hyper-util) v' >&2; \
+		exit 1; \
+	fi
+	@for crate in lanpull-store lanpull-cli; do \
+		deps=$$($(CARGO) tree -p $$crate --depth 1 --edges normal --prefix none) || { \
+			echo "lanpull: cargo tree failed for $$crate" >&2; exit 1; }; \
+		if printf '%s\n' "$$deps" | grep -Eq '^(axum|axum-server) v'; then \
+			echo "lanpull: $$crate must not depend on axum directly" >&2; \
+			printf '%s\n' "$$deps" | grep -E '^(axum|axum-server) v' >&2; \
+			exit 1; \
+		fi; \
+	done
+
+check-scripts: ## Parse the server shell scripts through the shared checker
+	@$(SCRIPTS)/check-scripts.sh
+
+guard-test: ## Run negative safety tests for the privileged scripts
+	$(SCRIPTS)/guard_test.sh
+
+e2e: build ## Run the loopback end-to-end smoke test (dev only; needs python3)
+	$(SCRIPTS)/e2e.sh "$(abspath $(BINARY))" "$(abspath $(CLIENT_DIR))"
+
+LOAD_CLIENTS ?= 8
+SOAK_ROUNDS  ?= 3
+load: build ## Run concurrent loopback clients (periodic; not a gate)
+	$(SCRIPTS)/load_test.sh "$(abspath $(BINARY))" "$(abspath $(CLIENT_DIR))" "$(LOAD_CLIENTS)"
+
+soak: build ## Repeat the concurrent load smoke (periodic; not a gate)
+	@round=1; while [ "$$round" -le "$(SOAK_ROUNDS)" ]; do \
+		echo "soak: round $$round/$(SOAK_ROUNDS)"; \
+		$(SCRIPTS)/load_test.sh "$(abspath $(BINARY))" "$(abspath $(CLIENT_DIR))" "$(LOAD_CLIENTS)" || exit 1; \
+		round=$$((round + 1)); \
+	done
+
+dast: build ## Run the local DAST checks (testssl.sh + HTTP probes; not a gate)
+	@command -v testssl.sh >/dev/null 2>&1 || [ -n "$$TESTSSL" ] || { \
+		echo "lanpull: missing testssl.sh; set TESTSSL=/path/to/testssl.sh" >&2; exit 1; }
+	$(SCRIPTS)/dast.sh "$(abspath $(BINARY))" "$(abspath $(CLIENT_DIR))"
+
+test-musl: check-build-tools ## Run the test suite against the musl target
+	$(CARGO) test --locked --workspace --target $(TARGET)
+
+nextest: ## Run tests through cargo-nextest (advisory; not a gate)
+	@command -v cargo-nextest >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-nextest; install it with 'cargo install --locked cargo-nextest'" >&2; exit 1; }
+	$(CARGO) nextest run --locked --workspace
+
+hack: ## Check the feature matrix with cargo-hack (advisory; not a gate)
+	@command -v cargo-hack >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-hack; install it with 'cargo install --locked cargo-hack'" >&2; exit 1; }
+	$(CARGO) hack check --workspace --each-feature --all-targets
+
+mutants-list: ## List cargo-mutants candidates (advisory; not a gate)
+	@command -v cargo-mutants >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-mutants; install it with 'cargo install --locked cargo-mutants'" >&2; exit 1; }
+	$(CARGO) mutants --list --workspace
+
+mutants: ## Run cargo-mutants over the workspace (advisory; slow)
+	@command -v cargo-mutants >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-mutants; install it with 'cargo install --locked cargo-mutants'" >&2; exit 1; }
+	$(CARGO) mutants --workspace
+
+vet-init: ## Initialize the cargo-vet supply-chain policy (one-time)
+	@command -v cargo-vet >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-vet; install it with 'cargo install --locked cargo-vet'" >&2; exit 1; }
+	$(CARGO) vet init
+
+vet: ## Audit supply-chain trust with cargo-vet (advisory; not a gate)
+	@command -v cargo-vet >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-vet; install it with 'cargo install --locked cargo-vet'" >&2; exit 1; }
+	$(CARGO) vet --locked
+
+bloat: build ## Report binary size by crate (advisory; not a gate)
+	@command -v cargo-bloat >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-bloat; install it with 'cargo install --locked cargo-bloat'" >&2; exit 1; }
+	$(CARGO) bloat --release --target $(TARGET) --crates
+
+deadlinks: doc ## Check rustdoc links (advisory; known dispatcher false positive)
+	@command -v cargo-deadlinks >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-deadlinks; install it with 'cargo install --locked cargo-deadlinks'" >&2; exit 1; }
+	$(CARGO) deadlinks --dir target/doc
+
+msrv: ## Check the declared MSRV (requires the MSRV toolchain)
+	@$(RUSTUP) toolchain list | grep -q "^$(MSRV)" || { \
+		echo "lanpull: Rust $(MSRV) is not installed; run '$(RUSTUP) toolchain install $(MSRV) --profile minimal'" >&2; \
+		exit 1; \
+	}
+	$(CARGO) +$(MSRV) check --locked --workspace --all-targets
+
+bench: ## Run the criterion benchmarks (advisory; not a gate)
+	$(CARGO) bench --locked --workspace
+
+coverage: ## Report test coverage (floor 53% lines; not a gate)
+	@command -v cargo-llvm-cov >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-llvm-cov; install it with 'cargo install cargo-llvm-cov --locked' and 'rustup component add llvm-tools-preview'" >&2; \
+		exit 1; \
+	}
+	$(CARGO) llvm-cov --locked --workspace --summary-only --fail-under-lines 53
+
+coverage-e2e: ## Coverage of the CLI and e2e paths (advisory; not a gate)
+	@command -v cargo-llvm-cov >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-llvm-cov; install it with 'cargo install cargo-llvm-cov --locked' and 'rustup component add llvm-tools-preview'" >&2; \
+		exit 1; \
+	}
+	@set -e; \
+		cleanup() { $(CARGO) clean >/dev/null 2>&1 || true; rm -f "$$PWD"/*.profraw; }; \
+		trap cleanup EXIT INT TERM; \
+		$(CARGO) clean; \
+		mkdir -p target/coverage-e2e; \
+		eval "$$($(CARGO) llvm-cov show-env --sh 2>/dev/null)"; \
+		export LLVM_PROFILE_FILE="$(abspath target/coverage-e2e)/%p-%m.profraw"; \
+		$(CARGO) build --locked; \
+		$(SCRIPTS)/cli_test.sh "$(abspath target/debug/lanpull)"; \
+		$(SCRIPTS)/e2e.sh "$(abspath target/debug/lanpull)" "$(abspath $(CLIENT_DIR))"; \
+		mv target/coverage-e2e/*.profraw target/; \
+		$(CARGO) llvm-cov report --summary-only --fail-under-lines 75
+
+coverage-clean: ## Remove LLVM coverage profiles
+	rm -rf target/coverage-e2e
+	rm -f ./*.profraw target/*.profraw
+
+FUZZ_TARGETS := config glob manifest relpath
+FUZZ_TIME    ?= 20
+
+release-setup: ## Install cargo-about only (already part of setup)
+	$(CARGO) install --locked --features cli cargo-about@0.9.2
+
+licenses: ## Regenerate THIRD_PARTY_LICENSES.md from Cargo.lock
+	@command -v cargo-about >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-about; run 'make -C server release-setup'" >&2; exit 1; \
+	}
+	$(CARGO) about generate --manifest-path Cargo.toml --config about.toml about.hbs \
+		-o ./THIRD_PARTY_LICENSES.md
+
+licenses-check: ## Fail when THIRD_PARTY_LICENSES.md is stale
+	@command -v cargo-about >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-about; run 'make -C server release-setup'" >&2; exit 1; \
+	}
+	@set -e; tmp=$$(mktemp); trap 'rm -f "$$tmp"' EXIT; \
+		$(CARGO) about generate --manifest-path Cargo.toml --config about.toml about.hbs -o "$$tmp"; \
+		cmp -s "$$tmp" ./THIRD_PARTY_LICENSES.md || { \
+			echo "lanpull: THIRD_PARTY_LICENSES.md is stale; run 'make licenses'" >&2; \
+			exit 1; \
+		}
+
+fuzz-check: ## Lint the detached fuzz crate (stable Clippy)
+	$(CARGO) clippy --locked --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
+
+fuzz: ## Run a short fuzz smoke over the parsers (nightly + cargo-fuzz; not a gate)
+	@command -v cargo-fuzz >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-fuzz; run 'cargo install cargo-fuzz --locked' and 'rustup toolchain install nightly'" >&2; \
+		exit 1; \
+	}
+	@for target in $(FUZZ_TARGETS); do \
+		echo "fuzz: $$target ($(FUZZ_TIME)s)"; \
+		$(CARGO) +nightly fuzz run $$target -- -max_total_time=$(FUZZ_TIME) -rss_limit_mb=2048 || exit 1; \
+	done
+
+cli-test: build-debug ## Run the operator-style CLI test against the debug binary
+	$(SCRIPTS)/cli_test.sh "$(abspath $(BINARY_DEBUG))"
+
+audit: ## Scan dependencies for known vulnerabilities
+	$(CARGO) audit
+
+audit-bin: build ## Audit the compiled binary's embedded dependency list
+	$(CARGO) audit bin $(BINARY)
+
+geiger: ## Report unsafe usage across the dependency tree (advisory; not a gate)
+	@command -v cargo-geiger >/dev/null 2>&1 || { \
+		echo "lanpull: missing cargo-geiger; run 'make setup'" >&2; exit 1; }
+	@for member in $(CRATES); do \
+		echo "geiger: $$member"; \
+		(cd $(CRATE_DIR)/$$member && $(CARGO) geiger --forbid-only) || exit 1; \
+	done
+
+security: audit audit-bin ## Run every blocking supply-chain security check
+	@KANTEI_BIN=$(HOME)/.cargo/bin/kantei $(HOME)/.cargo/bin/komainu run --gates deny,audit-config
+
+
+# --- Client orchestration -------------------------------------------------
+client-ci: ## Run the Python client quality gate
+	@$(MAKE) --no-print-directory -C client ci
+
+client-check: ## Fast static checks on the Python client
 	@$(MAKE) --no-print-directory -C client lint typecheck
 
 test-all: ## Run the Rust and Python test suites
-	@$(MAKE) --no-print-directory -C server test
+	@$(CARGO) test --locked --workspace
 	@$(MAKE) --no-print-directory -C client test
 
-ci: check-scripts ## Run every quality and security gate on both sides
-	@$(MAKE) --no-print-directory -C server ci
-	@$(MAKE) --no-print-directory -C client ci
+# --- Quality gates (Rust via komainu) ------------------------------------
+komainu-check: ## Run komainu check layer
+	@KANTEI_BIN=$(HOME)/.cargo/bin/kantei $(HOME)/.cargo/bin/komainu run check
 
-ci-par: check-scripts ## Run server and client ci concurrently
+komainu-ci: ## Run komainu ci layer
+	@KANTEI_BIN=$(HOME)/.cargo/bin/kantei $(HOME)/.cargo/bin/komainu run ci
+
+check: komainu-check ## Fast static checks (Rust via komainu)
+ci: ## Run every quality and security gate on both sides
+	@KANTEI_BIN=$(HOME)/.cargo/bin/kantei $(HOME)/.cargo/bin/komainu run ci
+	@$(MAKE) --no-print-directory check-core guard-test cli-test
+	@$(MAKE) --no-print-directory e2e
+	@$(MAKE) --no-print-directory client-ci
+
+ci-par: ## Run Rust and client ci concurrently
 	@srv=0; cli=0; \
-	$(MAKE) --no-print-directory -C server ci & s=$$!; \
-	$(MAKE) --no-print-directory -C client ci & c=$$!; \
+	KANTEI_BIN=$(HOME)/.cargo/bin/kantei $(HOME)/.cargo/bin/komainu run ci && $(MAKE) --no-print-directory check-core guard-test cli-test & s=$$!; \
+	$(MAKE) --no-print-directory client-ci & c=$$!; \
 	wait $$s || srv=1; \
 	wait $$c || cli=1; \
 	[ $$srv -eq 0 ] && [ $$cli -eq 0 ]
 
-# The single gate named in the project rules: cheap checks first, then the full suite,
-# then the release-binary audit and the loopback end-to-end round. The full gate
-# requires the real secret and shell linters; the fast loop keeps the fallbacks.
 ci-full: export REQUIRE_GITLEAKS := 1
 ci-full: export REQUIRE_SHELLCHECK := 1
 ci-full: secrets docs-check ci
-	@$(MAKE) --no-print-directory -C server licenses-check audit-bin e2e
+	@$(MAKE) --no-print-directory licenses-check audit-bin e2e
 
+# --- Repository-level checks (root only) ----------------------------------
 secrets: ## Scan the working tree for credentials
 	@scripts/secret-scan.sh
 
 docs-check: ## Check links, the public/private boundary, and the version
 	@scripts/docs-check.sh
 
-check-scripts: ## Parse and lint the repository shell scripts
-	@scripts/check-scripts.sh
-
 lint-whitespace: ## Reject whitespace errors in the working diff
 	@git diff --check
 
 check-git: ## Fail when the working tree is not clean
-	@test -z "$$(git status --porcelain)" || { \
-		echo "lanpull: the working tree is not clean" >&2; \
-		git status --short >&2; \
-		exit 1; \
-	}
-
-release: ## Build the release archive (does not tag)
-	@scripts/release.sh
-
-release-check: ## Rehearse the release layout from the working tree
-	@scripts/release.sh --check
-
-release-repro: ## Build the release archive twice and compare the hashes
-	@scripts/release-repro.sh
-
-publish: ## Publish the release to GitHub (needs gh auth)
-	@scripts/publish.sh
-
-publish-draft: ## Publish the release as a draft for review
-	@scripts/publish.sh --draft
-
-hooks: ## Install the pre-push hook
-	@hook=$$(git rev-parse --git-path hooks/pre-push) || exit 1; \
-	install -Dm755 scripts/git-hooks/pre-push "$$hook"; \
-	printf 'installed %s\n' "$$hook"
-
-hooks-uninstall: ## Remove the pre-push hook
-	@hook=$$(git rev-parse --git-path hooks/pre-push) || exit 1; \
-	rm -f "$$hook"; \
-	printf 'removed %s\n' "$$hook"
-
-client-%:
-	@$(MAKE) --no-print-directory -C client $(patsubst client-%,%,$@)
-
-%:
-	@$(MAKE) --no-print-directory -C server $@
+	@git diff --quiet && git diff --cached --quiet || { echo "working tree not clean" >&2; exit 1; }

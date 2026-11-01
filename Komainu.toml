@@ -1,0 +1,16 @@
+# komainu gate client configuration.
+workspace = "."
+
+[binary]
+name = "lanpull"
+
+[gates]
+# with_db = false        # None => auto-detect
+# with_http = false      # None => auto-detect
+# with_browser = false   # None => auto-detect
+exclude = ["licenses-check"]
+
+# [budgets]
+# timeout_multiplier = 1.0
+# cpu_slots = 4
+# memory_mb = 8192
