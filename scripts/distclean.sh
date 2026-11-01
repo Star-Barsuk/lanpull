@@ -21,7 +21,6 @@ require_safe_path "$root" REPO_ROOT
 find "$root" \
     -path "$root/.git" -prune -o \
     -path "$root/target" -prune -o \
-    -path "$root/server/target" -prune -o \
     -path "$root/client/.venv" -prune -o \
     -type f \( -name '.lanpull.lock' -o -name 'state.json' \
         -o -name '*.part' -o -name '.lanpull.partials.json' \) \

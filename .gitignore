@@ -63,3 +63,6 @@ state.json
 *~
 .DS_Store
 Thumbs.db
+
+# quality generated manifests
+.quality/

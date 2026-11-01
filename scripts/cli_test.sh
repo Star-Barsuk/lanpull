@@ -18,7 +18,7 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 binary=${1:-}
 [ -n "$binary" ] || die "cli-test: binary path is required"
 [ -x "$binary" ] || die "cli-test: binary not executable: $binary (run make build)"
-client_dir=$script_dir/../../client
+client_dir=$script_dir/../client
 [ -f "$client_dir/pull.py" ] || die "cli-test: client bundle not found under $client_dir"
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/lanpull-cli.XXXXXX")
