@@ -7,21 +7,21 @@ also be handed to the team directly.
 
 ## Versioning
 
-- The product version lives in `[workspace.package]` in `server/Cargo.toml`;
-  the git tag is `v<version>` and follows Semantic Versioning.
+- The product version lives in `[workspace.package]` in ` Cargo.toml`;
+ the git tag is `v<version>` and follows Semantic Versioning.
 - `client/VERSION` is the client's own self-update version (2.3.1 in the 1.0.0
-  release). It changes only when `pull.py` changes, and is listed in the
-  release notes.
+ release). It changes only when `pull.py` changes, and is listed in the
+ release notes.
 - `CHANGELOG.md` is the source of the release notes; the archive carries the
-  matching `RELEASE_NOTES.md`.
+ matching `RELEASE_NOTES.md`.
 
 ## One-time setup
 
 ```bash
-make setup       # Rust toolchain and the gate tools, including cargo-about
+make setup    # Rust toolchain and the gate tools, including cargo-about
 ```
 
-`make -C server release-setup` remains available to install only
+`make release-setup` remains available to install only
 `cargo-about` on a machine set up before it became part of `make setup`.
 
 ## Build
@@ -34,7 +34,7 @@ tree without requiring a commit; it still writes `dist/` but never tags or
 publishes.
 
 ```bash
-git status --short               # must be empty
+git status --short        # must be empty
 make release
 ```
 
@@ -43,8 +43,8 @@ Output:
 ```text
 dist/lanpull-v1.0.0.tar.gz
 dist/SHA256SUMS
-dist/COMMIT                      # commit the archive was built from
-dist/lanpull-v1.0.0/             # staging directory, safe to delete
+dist/COMMIT           # commit the archive was built from
+dist/lanpull-v1.0.0/       # staging directory, safe to delete
 ```
 
 The script checks the staged binary and client versions, checks that the binary
@@ -61,7 +61,7 @@ from git as well as next to the archive:
 
 ```bash
 git tag -a v1.0.0 -m "lanpull 1.0.0" \
-  -m "SHA256 (lanpull-v1.0.0.tar.gz): <hash>"
+ -m "SHA256 (lanpull-v1.0.0.tar.gz): <hash>"
 git push origin v1.0.0
 ```
 
@@ -94,16 +94,16 @@ replaces its assets and notes.
 ## Archive contents
 
 ```text
-bin/lanpull                     static x86_64-unknown-linux-musl binary
-client/pull.py, client/VERSION  client bundle for --self-update
-systemd/lanpull.service         unit template
-config/lanpull.conf.example     configuration template
-README.md  LICENSE
-THIRD_PARTY_LICENSES.md         licenses of the statically linked crates
-RELEASE_NOTES.md                the CHANGELOG section for this version
-docs/                           the public reference, security, contributing, release docs
-server/Cargo.toml               build metadata referenced by the README badges
-client/pyproject.toml           client tooling metadata referenced by the README badges
+bin/lanpull           static x86_64-unknown-linux-musl binary
+client/pull.py, client/VERSION client bundle for --self-update
+systemd/lanpull.service     unit template
+config/lanpull.conf.example   configuration template
+README.md LICENSE
+THIRD_PARTY_LICENSES.md     licenses of the statically linked crates
+RELEASE_NOTES.md        the CHANGELOG section for this version
+docs/              the public reference, security, contributing, release docs
+ Cargo.toml        build metadata referenced by the README badges
+client/pyproject.toml      client tooling metadata referenced by the README badges
 ```
 
 The archive contains no configuration, credentials, keys, or `CHANGELOG.md`.
@@ -113,8 +113,8 @@ The archive contains no configuration, credentials, keys, or `CHANGELOG.md`.
 ```bash
 sha256sum -c SHA256SUMS
 tar -xzf lanpull-v1.0.0.tar.gz
-./lanpull-v1.0.0/bin/lanpull --version          # 1.0.0
-./lanpull-v1.0.0/client/pull.py --version       # 2.3.1
+./lanpull-v1.0.0/bin/lanpull --version     # 1.0.0
+./lanpull-v1.0.0/client/pull.py --version    # 2.3.1
 ```
 
 Compare the hash with the one in the annotated tag (`git show v1.0.0`). The
@@ -133,4 +133,4 @@ hash in the tag message is the record of what was released.
 - Artifact signing (checksums only for now).
 - Reproducible builds byte-for-byte.
 - A hosted CI workflow or an automated release pipeline; publication is the
-  local `gh` step above.
+ local `gh` step above.

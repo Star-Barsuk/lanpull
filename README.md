@@ -2,7 +2,7 @@
 
 # lanpull
 
-[![Rust](https://img.shields.io/badge/Rust-1.88%2B-orange?style=flat&logo=rust&logoColor=white)](server/Cargo.toml) [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat&logo=python&logoColor=white)](client/pyproject.toml) [![TLS](https://img.shields.io/badge/TLS-pinned-brightgreen?style=flat&logo=letsencrypt&logoColor=white)](#security-model)
+[![Rust](https://img.shields.io/badge/Rust-1.88%2B-orange?style=flat&logo=rust&logoColor=white)](Cargo.toml) [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat&logo=python&logoColor=white)](client/pyproject.toml) [![TLS](https://img.shields.io/badge/TLS-pinned-brightgreen?style=flat&logo=letsencrypt&logoColor=white)](#security-model)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Platform](https://img.shields.io/badge/Platform-Linux-blueviolet?style=flat&logo=linux&logoColor=white)](#requirements) [![Reference](https://img.shields.io/badge/docs-REFERENCE-blue?style=flat)](docs/REFERENCE.md)
 
 A minimal, manual file-distribution tool for a local network.
@@ -294,30 +294,30 @@ make ci-par          # server and client ci concurrently
 make ci-full         # the gate: secrets, docs, both sides, notices, audit-bin, e2e
 make lint-whitespace # reject whitespace errors in the working diff
 make check-git       # fail when the working tree is not clean
-make -C server e2e   # loopback end-to-end round of the real server and pull.py
+make e2e   # loopback end-to-end round of the real server and pull.py
 make secrets         # working-tree secret scan (gitleaks or fallback)
 make docs-check      # links, the public/private boundary, the client version
 make check-scripts   # repository shell scripts (sh -n and shellcheck)
 make coverage        # coverage report (advisory; make client-coverage too)
-make -C server coverage-e2e # instrumented CLI/e2e coverage (advisory)
-make -C server coverage-clean # remove leftover LLVM coverage profiles
-make -C server geiger # unsafe inventory (advisory, not part of the gate)
-make -C server msrv   # check the declared MSRV 1.88 when installed
-make -C server test-musl # run the suite against the musl target
-make -C server fuzz  # nightly fuzz smoke of the parsers (not part of the gate)
-make -C server fuzz-check # stable Clippy over the fuzz crate
-make -C server load  # concurrent loopback clients
-make -C server soak  # repeat the concurrency smoke
-make -C server bench # criterion baselines (advisory)
-make -C server dast  # TLS/HTTP probes (needs testssl.sh; not part of the gate)
+make coverage-e2e # instrumented CLI/e2e coverage (advisory)
+make coverage-clean # remove leftover LLVM coverage profiles
+make geiger # unsafe inventory (advisory, not part of the gate)
+make msrv   # check the declared MSRV 1.88 when installed
+make test-musl # run the suite against the musl target
+make fuzz  # nightly fuzz smoke of the parsers (not part of the gate)
+make fuzz-check # stable Clippy over the fuzz crate
+make load  # concurrent loopback clients
+make soak  # repeat the concurrency smoke
+make bench # criterion baselines (advisory)
+make dast  # TLS/HTTP probes (needs testssl.sh; not part of the gate)
 make release-check   # rehearse the release layout from the working tree
 make release-repro   # build the archive twice and compare the hashes
 make hooks           # install the optional pre-push net
 ```
 
-Optional advisory tools (not part of the gate): `make -C server
+Optional advisory tools (not part of the gate): `make
 setup-advisory`, then `nextest`, `hack`, `spell`, `toml-check`, `mutants`,
-`vet`, `bloat`, and `deadlinks`. `make -C server setup-optional` installs
+`vet`, `bloat`, and `deadlinks`. `make setup-optional` installs
 `shellcheck`, `gitleaks`, and `testssl.sh` under `~/.local`.
 
 `make setup` installs the Rust target and the pinned gate tools; the client gates

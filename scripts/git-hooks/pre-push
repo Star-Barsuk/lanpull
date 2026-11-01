@@ -16,8 +16,8 @@ set -eu
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 
-printf 'pre-push: fmt-check, clippy, cargo-deny, ruff, scripts, secrets, docs-check\n' >&2
-make -C server fmt-check lint deny
+printf 'pre-push: quality check, ruff, scripts, secrets, docs-check\n' >&2
+QUALITY_BIN="${HOME}/.cargo/bin/quality" "${HOME}/.cargo/bin/quality" run check
 make -C client lint
 make check-scripts
 make secrets
