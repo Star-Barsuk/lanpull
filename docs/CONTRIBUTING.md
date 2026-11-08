@@ -18,8 +18,7 @@ The gate is not part of this repository.
 ```bash
 make setup             # pinned Rust toolchain
 make test-all          # Rust and Python test suites
-make e2e               # loopback end-to-end round
-make security          # dependency and release-binary audit
+scripts/gate-e2e.sh    # loopback end-to-end round
 ```
 
 The Rust toolchain and the Python development tools are pinned to known-good
