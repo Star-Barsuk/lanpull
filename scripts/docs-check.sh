@@ -26,7 +26,7 @@ note() {
 # The public tree is every tracked file except private documents and tooling.
 # Deriving it from the index means a new public file is scanned automatically.
 public_files=$(cd "$root" && {
-    git ls-files | grep -Ev '^(AGENTS\.md|tools/|docs/)|(^|/)\.|/fixtures/|^fuzz/(corpus|artifacts)/'
+    git ls-files | grep -Ev '^(AGENTS\.md|tools/|docs/)|(^|/)\.|/fixtures/'
     git ls-files docs/CONTRIBUTING.md docs/REFERENCE.md docs/RELEASE.md docs/SECURITY.md
 })
 allowed_docs="REFERENCE.md SECURITY.md CONTRIBUTING.md RELEASE.md"
