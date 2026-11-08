@@ -21,7 +21,7 @@ MYPY       := $(BIN)/mypy
 PYTEST     := $(BIN)/pytest
 PIP_AUDIT  := $(BIN)/pip-audit
 
-.PHONY: help doctor setup check-tools format lint typecheck test coverage audit lock-check clean ci
+.PHONY: help doctor setup check-tools version-check format lint typecheck test coverage audit lock-check clean ci
 
 help: ## Show available targets
 	@awk 'BEGIN { FS = " ## " } /^[a-zA-Z0-9_-]+:.*## / { split($$1, t, ":"); printf "  %-16s %s\n", t[1], $$2 }' $(MAKEFILE_LIST)
@@ -44,6 +44,13 @@ $(STAMP): requirements-dev.in requirements-dev.txt pyproject.toml | check-tools
 	@touch $(STAMP)
 
 setup: check-tools $(STAMP) ## Create the dev environment and install pinned tools
+
+version-check: ## Fail when VERSION and pull.py disagree
+	@version=$$(cat VERSION); \
+	grep -q "^__version__ = \"$$version\"$$" pull.py || { \
+		echo "lanpull: client/VERSION ($$version) and pull.py __version__ disagree" >&2; \
+		exit 1; \
+	}
 
 format: $(STAMP) ## Format the client sources
 	$(RUFF) format .
@@ -80,4 +87,4 @@ clean: ## Remove the virtual environment, coverage output, and Python caches
 		.coverage .coverage.* htmlcov coverage.xml
 	find . -name '*.pyc' -delete
 
-ci: check-tools lock-check lint typecheck test audit ## Run every client quality and security gate
+ci: check-tools lock-check version-check lint typecheck test audit ## Run every client quality and security gate

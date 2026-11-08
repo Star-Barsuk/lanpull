@@ -283,7 +283,8 @@ and is not part of this repository.
 
 ```bash
 make doctor          # toolchain and service status
-make test-all        # Rust and Python test suites
+cargo test --locked --workspace   # Rust test suite
+make -C client test               # Python client tests
 make dast            # TLS/HTTP probes (needs testssl.sh; dev-only)
 make load / soak     # concurrent loopback clients (periodic)
 make test-musl       # the suite against the musl target (periodic)

@@ -17,7 +17,8 @@ The gate is not part of this repository.
 
 ```bash
 make setup             # pinned Rust toolchain
-make test-all          # Rust and Python test suites
+cargo test --locked --workspace   # Rust test suite
+make -C client test               # Python client tests
 scripts/gate-e2e.sh    # loopback end-to-end round
 ```
 
