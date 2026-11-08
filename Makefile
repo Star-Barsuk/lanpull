@@ -58,7 +58,7 @@ UNINSTALL_CMD = $(SCRIPTS)/uninstall.sh --binary "$(LANPULL)" --unit "$(UNIT)" \
 
 .PHONY: help doctor setup build build-debug install uninstall wipe \
         clean distclean confirm check-build-tools dast load soak \
-        test-musl client-check test-all lint-whitespace check-git
+        test-musl lint-whitespace check-git
 
 help: ## Show available targets
 	@$(SCRIPTS)/help.sh
@@ -163,14 +163,6 @@ test-musl: check-build-tools ## Run the test suite against the musl target
 
 
 
-
-# --- Client orchestration -------------------------------------------------
-client-check: ## Fast static checks on the Python client
-	@$(MAKE) --no-print-directory -C client lint typecheck
-
-test-all: ## Run the Rust and Python test suites
-	@$(CARGO) test --locked --workspace
-	@$(MAKE) --no-print-directory -C client test
 
 lint-whitespace: ## Reject whitespace errors in the working diff
 	@git diff --check

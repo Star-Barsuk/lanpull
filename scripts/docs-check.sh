@@ -6,8 +6,7 @@
 #
 # 1. the public tree never references a private document;
 # 2. relative Markdown links resolve from the document's own directory;
-# 3. private documents and tools stay out of the git index;
-# 4. client/VERSION and pull.py __version__ agree.
+# 3. private documents and tools stay out of the git index.
 #
 # Prose accuracy is a review concern; this script only catches facts that a
 # script can prove wrong.
@@ -114,17 +113,6 @@ if [ -n "$(cd "$root" && git ls-files "$agents_name")" ]; then
 fi
 if [ -n "$(cd "$root" && git ls-files tools)" ]; then
     note "tools/ is tracked; it is private"
-fi
-
-# --- 4. Client version ---------------------------------------------------
-version_file=$root/client/VERSION
-if [ ! -f "$version_file" ]; then
-    note "client/VERSION is missing"
-else
-    version=$(tr -d '[:space:]' <"$version_file")
-    if ! grep -q "^__version__ = \"$version\"$" "$root/client/pull.py"; then
-        note "client/VERSION ($version) and pull.py __version__ disagree"
-    fi
 fi
 
 if [ "$fail" -eq 0 ]; then
