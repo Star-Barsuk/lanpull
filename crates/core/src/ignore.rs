@@ -324,8 +324,7 @@ mod tests {
         clippy::panic,
         clippy::indexing_slicing,
         clippy::arithmetic_side_effects,
-        clippy::missing_assert_message,
-        clippy::assert_is_empty
+        clippy::missing_assert_message
     )]
 
     use super::*;
@@ -681,7 +680,7 @@ mod tests {
     fn missing_file_still_applies_defaults() {
         let dir = tempfile::tempdir().unwrap();
         let (rules, warnings) = IgnoreRules::load(dir.path());
-        assert!(warnings.is_empty());
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
         assert!(rules.is_ignored("node_modules/x.js"));
         assert!(!rules.is_ignored("a.txt"));
     }

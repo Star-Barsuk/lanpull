@@ -4,7 +4,7 @@
 #
 # Parse and lint shell scripts. With no arguments the repository-level
 # scripts/ and scripts/git-hooks/ trees are checked; directory arguments let
-# the server Makefile reuse the same checker for server/scripts/.
+# the root Makefile reuses the same checker for scripts/.
 #
 # `sh -n` always runs; shellcheck runs when it is installed, and its absence is
 # reported rather than silently accepted. The full gate sets

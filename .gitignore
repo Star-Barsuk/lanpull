@@ -25,7 +25,6 @@ target/
 *.profraw
 mutants.out/
 mutants.out.old/
-server/.tools-stamp
 
 # --- Python ---------------------------------------------------------------
 __pycache__/
@@ -64,5 +63,3 @@ state.json
 .DS_Store
 Thumbs.db
 
-# quality generated manifests
-.quality/

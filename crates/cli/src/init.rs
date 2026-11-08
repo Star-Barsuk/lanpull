@@ -14,8 +14,8 @@ use lanpull_core::config as core_config;
 use lanpull_core::error::{Error, Result};
 use lanpull_core::ignore::IGNORE_FILE_NAME;
 
-use crate::cli::share::InitArgs;
 use crate::cli::Outcome;
+use crate::cli::share::InitArgs;
 
 /// Run `lanpull init`.
 pub fn run(config_path: &Path, args: &InitArgs) -> Result<Outcome> {

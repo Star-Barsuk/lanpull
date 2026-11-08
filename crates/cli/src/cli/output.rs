@@ -203,8 +203,7 @@ mod tests {
         clippy::expect_used,
         clippy::panic,
         clippy::indexing_slicing,
-        clippy::missing_assert_message,
-        clippy::assert_is_empty
+        clippy::missing_assert_message
     )]
 
     use super::*;
@@ -314,7 +313,10 @@ mod tests {
 
     #[test]
     fn format_rows_empty_input_is_empty() {
-        assert!(format_rows(&[]).is_empty());
+        assert!(
+            format_rows(&[]).is_empty(),
+            "an empty scrollback renders no rows"
+        );
     }
 
     #[test]

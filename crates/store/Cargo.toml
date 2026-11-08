@@ -2,17 +2,17 @@
 # Depends only on lanpull-core, never on the network layer.
 
 [package]
-name = "lanpull-store"
-description = "Share manifests, hash cache, and status checks for lanpull"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-readme.workspace = true
-keywords.workspace = true
 categories.workspace = true
+description = "Share manifests, hash cache, and status checks for lanpull"
+edition.workspace = true
+keywords.workspace = true
+license.workspace = true
+name = "lanpull-store"
 publish = false
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [lints]
 workspace = true
@@ -28,5 +28,5 @@ criterion.workspace = true
 tempfile.workspace = true
 
 [[bench]]
-name = "manifest"
 harness = false
+name = "manifest"

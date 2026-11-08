@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 #
 # Local DAST: TLS posture with testssl.sh plus HTTP behaviour probes against a
-# scratch server. Dev-only and not part of `make ci-full`: the scanner is an
+# scratch server. Dev-only and not part of the private gate: the scanner is an
 # external tool and the scan takes time. Self-signed certificate findings are
 # expected; only protocol, cipher, and SAN regressions fail.
 #

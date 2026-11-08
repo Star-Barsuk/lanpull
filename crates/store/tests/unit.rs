@@ -8,8 +8,7 @@
     clippy::panic,
     clippy::indexing_slicing,
     clippy::arithmetic_side_effects,
-    clippy::missing_assert_message,
-    clippy::assert_is_empty
+    clippy::missing_assert_message
 )]
 
 use std::collections::BTreeMap;
@@ -342,7 +341,10 @@ fn manifest_honors_lanpullignore() {
 
     let paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(paths, vec!["keep.txt"]);
-    assert!(warnings.ignore.is_empty());
+    assert!(
+        warnings.ignore.is_empty(),
+        "unexpected ignore warnings: {warnings:?}"
+    );
 }
 
 #[test]
@@ -401,7 +403,10 @@ fn manifest_applies_the_default_ignore_set() {
             "src/main.rs",
         ]
     );
-    assert!(warnings.ignore.is_empty());
+    assert!(
+        warnings.ignore.is_empty(),
+        "unexpected ignore warnings: {warnings:?}"
+    );
 }
 
 #[test]
@@ -516,7 +521,7 @@ fn bundle_builds_and_finds_files() {
 
 #[test]
 fn example_config_declares_a_named_share() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../config/lanpull.conf.example");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/lanpull.conf.example");
     let text = fs::read_to_string(&path).unwrap();
     let map = config::parse_kv(&text);
     assert!(
@@ -655,7 +660,10 @@ fn regenerate_prunes_removed_share_manifests() {
 fn audit_report_missing_log_is_empty() {
     let dir = tempfile::tempdir().unwrap();
     let report = audit::summarize(&dir.path().join("nope.log"), None, None).unwrap();
-    assert!(report.accounts.is_empty());
+    assert!(
+        report.accounts.is_empty(),
+        "a report must not contain unknown accounts"
+    );
 }
 
 #[test]

@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use axum::body::Body;
 use axum::extract::ConnectInfo;
-use axum::http::{header, Request, StatusCode};
+use axum::http::{Request, StatusCode, header};
 use base64::Engine as _;
 use http_body_util::BodyExt as _;
 use lanpull_core::access::Rule;
@@ -25,7 +25,7 @@ use lanpull_core::arm::ArmState;
 use lanpull_core::clients::{self, Account, Clients};
 use lanpull_core::config::Config;
 use lanpull_core::policy::Policy;
-use lanpull_http::{router, AppState};
+use lanpull_http::{AppState, router};
 use tower::ServiceExt as _;
 
 const REASON_HEADER: &str = "x-lanpull-reason";

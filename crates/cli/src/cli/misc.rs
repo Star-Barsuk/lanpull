@@ -12,8 +12,8 @@ use lanpull_core::timeutil;
 use lanpull_store::status;
 use serde::Serialize;
 
-use crate::cli::output::format_rows;
 use crate::cli::Outcome;
+use crate::cli::output::format_rows;
 
 /// Arguments for `status`.
 #[derive(Debug, clap::Args)]

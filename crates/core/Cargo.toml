@@ -2,17 +2,17 @@
 # No network dependency, so the core is testable in isolation.
 
 [package]
-name = "lanpull-core"
-description = "Configuration, access policy, accounts, and state for lanpull"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-readme.workspace = true
-keywords.workspace = true
 categories.workspace = true
+description = "Configuration, access policy, accounts, and state for lanpull"
+edition.workspace = true
+keywords.workspace = true
+license.workspace = true
+name = "lanpull-core"
 publish = false
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [lints]
 workspace = true
@@ -36,5 +36,5 @@ proptest.workspace = true
 tempfile.workspace = true
 
 [[bench]]
-name = "matching"
 harness = false
+name = "matching"

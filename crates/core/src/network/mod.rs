@@ -183,7 +183,10 @@ mod tests {
     fn missing_file_is_an_empty_set() {
         let dir = tempfile::tempdir().unwrap();
         let networks = Networks::load(&dir.path().join("absent.json")).unwrap();
-        assert!(networks.is_empty());
+        assert!(
+            networks.is_empty(),
+            "a missing file must produce an empty set"
+        );
         assert_eq!(networks.len(), 0);
     }
 
@@ -205,7 +208,10 @@ mod tests {
         networks.insert(sample());
         assert!(networks.remove("home"));
         assert!(!networks.remove("home"));
-        assert!(networks.is_empty());
+        assert!(
+            networks.is_empty(),
+            "removing the last network must leave the set empty"
+        );
     }
 
     #[test]

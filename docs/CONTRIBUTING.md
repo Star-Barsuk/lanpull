@@ -12,23 +12,20 @@ minimal and in scope.
 
 ## Quality gate
 
-Every change must pass the gate before it is merged:
+Every change must pass the operator's private quality gate before it is merged.
+The gate is not part of this repository.
 
 ```bash
-make setup             # pinned Rust toolchain and gate tools
-make ci-full           # secrets, docs, both sides, notices, audit-bin, e2e
+make setup             # pinned Rust toolchain
+make test-all          # Rust and Python test suites
+make e2e               # loopback end-to-end round
+make security          # dependency and release-binary audit
 ```
 
-`make ci` is the fast inner loop (both sides, no end-to-end round, no
-release-binary audit, no secret scan); it is not sufficient on its own.
-`make check` runs the fast static checks and `make test-all` the test suites.
-`make hooks` installs an optional `pre-push` hook with the fast gates and the
-secret scan; it is a safety net, not the gate.
-
-The Rust toolchain, the gate tools, and the Python development tools are pinned
-to known-good versions. Bump them deliberately, never inline, and re-run
-`make ci-full`. The full gate also requires `gitleaks` and `shellcheck`; install
-both before claiming a green gate.
+The Rust toolchain and the Python development tools are pinned to known-good
+versions. Bump them deliberately, never inline, and re-run the private gate.
+The toolchain also requires `gitleaks` and `shellcheck`; install both before
+claiming a green gate.
 
 ## Review checklist
 
@@ -36,7 +33,7 @@ both before claiming a green gate.
 - Authentication, path validation, TLS, and file writes have a negative test.
 - `README.md` and `docs/REFERENCE.md` are updated if a flag, a key, or an error
   message changed.
-- `make ci-full` is green.
+- The private gate is green.
 - No secret, home path, real hostname, or personal data was added.
 - A decision is recorded when a tradeoff was made.
 

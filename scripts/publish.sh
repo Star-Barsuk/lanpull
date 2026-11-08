@@ -41,7 +41,7 @@ command -v gh >/dev/null 2>&1 || die "gh is missing; install the GitHub CLI"
 command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required"
 gh auth status >/dev/null 2>&1 || die "gh is not authenticated; run 'gh auth login' once"
 
-version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' server/Cargo.toml | head -n 1)
+version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
 [ -n "$version" ] || die "cannot read the workspace version"
 tag="v$version"
 tar="$root/dist/lanpull-$tag.tar.gz"

@@ -27,7 +27,7 @@ use crate::cli::account::AccountCommand;
 use crate::cli::config::ConfigCommand;
 use crate::cli::group::GroupCommand;
 use crate::cli::network::NetworkCommand;
-pub use crate::cli::output::{emit, emit_error, Outcome};
+pub use crate::cli::output::{Outcome, emit, emit_error};
 use crate::cli::service::ServiceCommand;
 use crate::cli::share::ShareCommand;
 

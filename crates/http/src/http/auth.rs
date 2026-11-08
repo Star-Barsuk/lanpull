@@ -11,7 +11,7 @@ use std::net::IpAddr;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use axum::http::{header, HeaderMap};
+use axum::http::{HeaderMap, header};
 use base64::Engine as _;
 
 use lanpull_core::clients::{self, Account};
@@ -25,8 +25,7 @@ use lanpull_core::timeutil;
 /// unknown-account check. It never matches a real password; `verify_password`
 /// still runs the full argon2 routine, so the cost is independent of whether
 /// the account exists.
-const DUMMY_PASSWORD_HASH: &str =
-    "$argon2id$v=19$m=19456,t=2,p=1$rn66er0ZraW8U6cAQFyp0w$ERZFdPrADf5JiG8ZH21LS6xGMhWXf+9XlSqwkLQFnUU";
+const DUMMY_PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$rn66er0ZraW8U6cAQFyp0w$ERZFdPrADf5JiG8ZH21LS6xGMhWXf+9XlSqwkLQFnUU";
 
 /// How long a successful password verification is reused.
 const CACHE_TTL: Duration = Duration::from_secs(30);
