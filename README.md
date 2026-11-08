@@ -269,68 +269,35 @@ To report a vulnerability, follow [docs/SECURITY.md](docs/SECURITY.md).
 
 ```text
 client/     # Python client, config examples, and Python tooling
-server/     # Rust crate and Rust tooling
+crates/     # Rust workspace (core, store, http, cli)
 config/     # server configuration examples
 systemd/    # service unit
-Makefile    # thin pattern forwarder to server/ and client/
+Makefile    # build, install, and the shared gate
 ```
-
-`client/` and `server/` can be checked out independently with
-`git sparse-checkout set client` or `set server`.
 
 ## 🛠️ Development
 
-Each side carries its own Makefile and its own static-analysis configuration.
-The root `Makefile` forwards `make <target>` to the server and
-`make client-<target>` to the client; `check`, `test-all`, `ci`, `ci-full`, and
-`setup` cover both sides.
+The Makefile keeps the project-specific build, install, test, client, and
+end-to-end operations. The quality gate is an operator-owned private workflow
+and is not part of this repository.
 
 ```bash
-make doctor          # toolchain and optional tool status
-make check           # fast static checks on both sides, no tests
+make doctor          # toolchain and service status
 make test-all        # Rust and Python test suites
-make ci              # fast loop: both sides, no e2e or secret scan
-make ci-par          # server and client ci concurrently
-make ci-full         # the gate: secrets, docs, both sides, notices, audit-bin, e2e
-make lint-whitespace # reject whitespace errors in the working diff
-make check-git       # fail when the working tree is not clean
-make e2e   # loopback end-to-end round of the real server and pull.py
-make secrets         # working-tree secret scan (gitleaks or fallback)
-make docs-check      # links, the public/private boundary, the client version
-make check-scripts   # repository shell scripts (sh -n and shellcheck)
-make coverage        # coverage report (advisory; make client-coverage too)
-make coverage-e2e # instrumented CLI/e2e coverage (advisory)
-make coverage-clean # remove leftover LLVM coverage profiles
-make geiger # unsafe inventory (advisory, not part of the gate)
-make msrv   # check the declared MSRV 1.88 when installed
-make test-musl # run the suite against the musl target
-make fuzz  # nightly fuzz smoke of the parsers (not part of the gate)
-make fuzz-check # stable Clippy over the fuzz crate
-make load  # concurrent loopback clients
-make soak  # repeat the concurrency smoke
-make bench # criterion baselines (advisory)
-make dast  # TLS/HTTP probes (needs testssl.sh; not part of the gate)
+make e2e             # loopback end-to-end round of the real server and pull.py
+make check-core      # lanpull-core stays free of the HTTP stack
+make guard-test      # negative safety tests for the privileged scripts
+make cli-test        # operator-style CLI checks against the debug binary
+make dast            # TLS/HTTP probes (needs testssl.sh; dev-only)
+make load / soak     # concurrent loopback clients (periodic)
+make test-musl       # the suite against the musl target (periodic)
+make security        # cargo audit and binary audit
 make release-check   # rehearse the release layout from the working tree
 make release-repro   # build the archive twice and compare the hashes
-make hooks           # install the optional pre-push net
 ```
 
-Optional advisory tools (not part of the gate): `make
-setup-advisory`, then `nextest`, `hack`, `spell`, `toml-check`, `mutants`,
-`vet`, `bloat`, and `deadlinks`. `make setup-optional` installs
-`shellcheck`, `gitleaks`, and `testssl.sh` under `~/.local`.
-
-`make setup` installs the Rust target and the pinned gate tools; the client gates
-create their uv-managed `.venv` on the minimum supported Python (3.11) on first
-run (`make -C client setup`), from the hash-locked `requirements-dev.txt`. The
-toolchain (`server/rust-toolchain.toml`) and the gate tools are pinned to
-known-good versions; bump them deliberately, never inline. `make -j2 ci` runs
-the server and client halves concurrently. `make ci-full` requires `gitleaks`
-and `shellcheck` so the full gate is not silently weaker
-without them; install both from your package manager (or the upstream release)
-and the fast loop keeps the documented fallbacks. There is
-intentionally **no hosted CI**: the gate is `make ci-full`, run deliberately
-before a push, and the pre-push hook is a net rather than the gate.
+`make setup` installs the Rust target. There is intentionally **no hosted CI**;
+the release workflow requires an external gate receipt (`GATE_RECEIPT`).
 
 ---
 
@@ -366,7 +333,7 @@ More symptoms and every command flag are in [docs/REFERENCE.md](docs/REFERENCE.m
 ## 🤝 Contributing
 
 Bug reports, ideas, and patches are welcome; the guidelines are in
-[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md). Run `make ci-full` before opening a
+[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md). Run the private gate before opening a
 pull request.
 
 ## 📄 License

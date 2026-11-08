@@ -12,9 +12,9 @@
 
 use std::hint::black_box;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use lanpull_core::access::{Access, Rule};
-use lanpull_store::manifest::{filter, Entry, Manifest};
+use lanpull_store::manifest::{Entry, Manifest, filter};
 
 fn filter_entries(c: &mut Criterion) {
     let files: Vec<Entry> = (0..2000)

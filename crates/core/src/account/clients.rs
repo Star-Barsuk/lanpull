@@ -11,8 +11,8 @@ use std::path::Path;
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::{Algorithm, Argon2, Params, Version};
-use rand::distr::{Alphanumeric, SampleString};
 use rand::RngCore;
+use rand::distr::{Alphanumeric, SampleString};
 
 use crate::error::{Error, Result};
 

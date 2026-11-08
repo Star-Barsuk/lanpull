@@ -1,27 +1,27 @@
 # lanpull-http: the HTTPS server and its request handlers.
 
 [package]
-name = "lanpull-http"
-description = "HTTPS server and request handlers for lanpull"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-readme.workspace = true
-keywords.workspace = true
 categories.workspace = true
+description = "HTTPS server and request handlers for lanpull"
+edition.workspace = true
+keywords.workspace = true
+license.workspace = true
+name = "lanpull-http"
 publish = false
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [lints]
 workspace = true
 
 [dependencies]
-lanpull-core = { path = "../core", version = "1.0.0" }
-lanpull-store = { path = "../store", version = "1.0.0" }
 axum.workspace = true
 axum-server.workspace = true
 base64.workspace = true
+lanpull-core = { path = "../core", version = "1.0.0" }
+lanpull-store = { path = "../store", version = "1.0.0" }
 libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true

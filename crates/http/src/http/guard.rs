@@ -21,7 +21,7 @@ use lanpull_core::timeutil;
 
 use crate::http::audit::{next_request_id, response_bytes, sanitize_host};
 use crate::http::auth::basic_credentials;
-use crate::http::{respond, AppState};
+use crate::http::{AppState, respond};
 
 /// Authenticate the request and write one audit record for the outcome.
 pub(super) async fn guard(

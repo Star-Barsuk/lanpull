@@ -1,17 +1,17 @@
 # lanpull-cli: the `lanpull` binary. A thin shell over the other crates.
 
 [package]
-name = "lanpull-cli"
-description = "Command-line interface for the lanpull server"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-readme.workspace = true
-keywords.workspace = true
 categories.workspace = true
+description = "Command-line interface for the lanpull server"
+edition.workspace = true
+keywords.workspace = true
+license.workspace = true
+name = "lanpull-cli"
 publish = false
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [lints]
 workspace = true
@@ -21,10 +21,10 @@ name = "lanpull"
 path = "src/main.rs"
 
 [dependencies]
-lanpull-core = { path = "../core", version = "1.0.0" }
-lanpull-store = { path = "../store", version = "1.0.0" }
-lanpull-http = { path = "../http", version = "1.0.0" }
 clap.workspace = true
+lanpull-core = { path = "../core", version = "1.0.0" }
+lanpull-http = { path = "../http", version = "1.0.0" }
+lanpull-store = { path = "../store", version = "1.0.0" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

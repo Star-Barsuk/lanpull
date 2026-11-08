@@ -8,8 +8,8 @@ use lanpull_core::error::{Error, Result};
 use lanpull_core::policy::Policy;
 use serde::Serialize;
 
-use crate::cli::output::format_rows;
 use crate::cli::Outcome;
+use crate::cli::output::format_rows;
 use crate::manifest_helpers::report_regeneration;
 
 /// Group operations.

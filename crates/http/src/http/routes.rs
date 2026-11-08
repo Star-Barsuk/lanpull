@@ -13,10 +13,10 @@ use axum::response::Response;
 use lanpull_core::relpath;
 use lanpull_store::bundle;
 
+use crate::http::AppState;
 use crate::http::auth::Principal;
 use crate::http::files;
 use crate::http::respond;
-use crate::http::AppState;
 
 /// Handler for `/_lanpull/share/<share>/manifest.json`.
 pub(super) async fn serve_share_manifest(

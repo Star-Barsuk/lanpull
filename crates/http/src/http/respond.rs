@@ -4,7 +4,7 @@
 //! response shape, so handlers never assemble status codes by hand.
 
 use axum::body::Body;
-use axum::http::{header, StatusCode};
+use axum::http::{StatusCode, header};
 use axum::response::Response;
 use serde::Serialize;
 

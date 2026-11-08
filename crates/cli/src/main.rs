@@ -25,7 +25,7 @@ use clap::Parser;
 use lanpull_core::config as core_config;
 use lanpull_core::error::{Error, Result};
 
-use crate::cli::{emit, emit_error, Cli, Command};
+use crate::cli::{Cli, Command, emit, emit_error};
 
 #[tokio::main]
 async fn main() -> ExitCode {

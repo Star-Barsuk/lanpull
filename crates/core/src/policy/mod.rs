@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::access::{Access, Rule};
 use crate::clients::Clients;
-use crate::config::{valid_share_name, Config};
+use crate::config::{Config, valid_share_name};
 use crate::error::{Error, Result};
 use crate::glob::Glob;
 
@@ -728,7 +728,10 @@ mod tests {
         assert!(share.clients.contains_key("alpha"));
         share.remove_for("alpha", "sub/personal.pdf");
         assert!(!share.clients.contains_key("alpha"));
-        assert!(share.allowed("alpha").is_empty());
+        assert!(
+            share.allowed("alpha").is_empty(),
+            "a removed path must leave no allow entry"
+        );
     }
 
     #[test]
@@ -737,7 +740,10 @@ mod tests {
         let share = policy.share_mut("cube").unwrap();
         share.add_for("alpha", "sub/f.pdf".to_string());
         share.remove_for("alpha", "sub/f.pdf");
-        assert!(share.allowed("alpha").is_empty());
+        assert!(
+            share.allowed("alpha").is_empty(),
+            "add followed by remove must cancel"
+        );
         share.add_for("alpha", "sub/f.pdf".to_string());
         assert!(share.allowed("alpha").contains("sub/f.pdf"));
     }
@@ -794,7 +800,10 @@ mod tests {
     fn missing_file_is_empty_policy() {
         let dir = tempfile::tempdir().unwrap();
         let policy = Policy::load(&dir.path().join("nope.json")).unwrap();
-        assert!(policy.shares.is_empty());
+        assert!(
+            policy.shares.is_empty(),
+            "a missing file must produce an empty policy"
+        );
     }
 
     #[test]
@@ -815,7 +824,10 @@ mod tests {
             .unwrap()
             .add_for("alpha", "x.pdf".to_string());
         assert!(empty.remove_account("alpha"));
-        assert!(empty.shares.is_empty());
+        assert!(
+            empty.shares.is_empty(),
+            "removing the last account must prune the share"
+        );
     }
 
     #[test]

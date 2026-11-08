@@ -642,15 +642,21 @@ mod tests {
     fn manifest_paths_are_per_share() {
         let m = map("SHARE_reports=/srv/r\nSTATE_DIR=/state\nSERVER_IP=127.0.0.1\n");
         let config = Config::from_map(&m).unwrap();
-        assert!(config
-            .manifest_path("reports")
-            .ends_with("manifest/reports.json"));
-        assert!(config
-            .cache_path("reports")
-            .ends_with("manifest/reports.cache.json"));
-        assert!(config
-            .access_manifest_path("laptop", "reports")
-            .ends_with("manifest/access/laptop/reports.json"));
+        assert!(
+            config
+                .manifest_path("reports")
+                .ends_with("manifest/reports.json")
+        );
+        assert!(
+            config
+                .cache_path("reports")
+                .ends_with("manifest/reports.cache.json")
+        );
+        assert!(
+            config
+                .access_manifest_path("laptop", "reports")
+                .ends_with("manifest/access/laptop/reports.json")
+        );
     }
 
     use proptest::prelude::*;

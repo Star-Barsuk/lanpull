@@ -11,14 +11,14 @@ use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
 use lanpull_core::cert;
-use lanpull_core::config::{valid_network_name, Config};
+use lanpull_core::config::{Config, valid_network_name};
 use lanpull_core::error::{Error, Result};
 use lanpull_core::network::{Network, Networks};
 use serde::Serialize;
 
+use crate::cli::Outcome;
 use crate::cli::output::format_rows;
 use crate::cli::service::{self, ServiceCommand};
-use crate::cli::Outcome;
 
 /// Network-profile operations.
 #[derive(Debug, Subcommand)]

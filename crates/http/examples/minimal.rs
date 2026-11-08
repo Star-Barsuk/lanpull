@@ -13,8 +13,8 @@
 use std::net::IpAddr;
 use std::path::PathBuf;
 
-use axum::routing::get;
 use axum::Router;
+use axum::routing::get;
 use lanpull_core::config::ServerSettings;
 use lanpull_http::serve_tls;
 

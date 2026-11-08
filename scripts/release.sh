@@ -2,9 +2,9 @@
 # Copyright (c) 2026 Star-Barsuk
 # SPDX-License-Identifier: MIT
 #
-# Build the release archive. Refuses a dirty tree, runs the full gate, checks
-# that the third-party notices match the dependency graph, and writes
-# dist/lanpull-v<version>.tar.gz plus SHA256SUMS.
+# Build the release archive. Refuses a dirty tree, requires an external gate
+# receipt, checks that the third-party notices match the dependency graph, and
+# writes dist/lanpull-v<version>.tar.gz plus SHA256SUMS.
 #
 # It does not tag or push: review the archive, then create the annotated tag
 # with the printed hash in its message.
@@ -13,7 +13,7 @@
 #
 # `--check` performs the same staging and validation from the working tree
 # (which may be dirty) without requiring a commit. Use it as a release
-# rehearsal; it still runs `make ci-full` and still writes dist/.
+# rehearsal; it still requires the external gate receipt and writes dist/.
 
 set -eu
 
@@ -45,11 +45,11 @@ die() {
     exit 1
 }
 
-version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' server/Cargo.toml | head -n 1)
-[ -n "$version" ] || die "cannot read the workspace version from server/Cargo.toml"
+version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+[ -n "$version" ] || die "cannot read the workspace version from Cargo.toml"
 tag="v$version"
 target=${TARGET:-x86_64-unknown-linux-musl}
-binary="server/target/$target/release/lanpull"
+binary="target/$target/release/lanpull"
 dist="$root/dist"
 stage="$dist/lanpull-$tag"
 
@@ -61,11 +61,12 @@ else
     [ -z "$(git status --porcelain)" ] || die "the working tree is not clean"
 fi
 
-printf 'release: running the gate\n'
-make ci-full
+printf 'release: checking the external gate receipt\n'
+[ -n "${GATE_RECEIPT:-}" ] || die "set GATE_RECEIPT to the private gate receipt before releasing"
+[ -f "$GATE_RECEIPT" ] || die "gate receipt not found: $GATE_RECEIPT"
 
 printf 'release: building %s\n' "$target"
-make -C server build
+make build
 [ -x "$binary" ] || die "binary not found at $binary"
 
 rm -rf "$stage"
@@ -75,7 +76,7 @@ install -m755 client/pull.py "$stage/client/"
 install -m644 client/VERSION client/pyproject.toml "$stage/client/"
 install -m644 systemd/lanpull.service "$stage/systemd/"
 install -m644 config/lanpull.conf.example "$stage/config/"
-install -m644 server/Cargo.toml "$stage/server/"
+install -m644 Cargo.toml "$stage/server/"
 install -m644 docs/REFERENCE.md docs/SECURITY.md docs/CONTRIBUTING.md docs/RELEASE.md "$stage/docs/"
 install -m644 README.md LICENSE THIRD_PARTY_LICENSES.md "$stage/"
 

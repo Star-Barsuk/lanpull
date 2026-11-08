@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use axum::http::{header, HeaderMap};
+use axum::http::{HeaderMap, header};
 use axum::response::Response;
 
 use lanpull_core::audit::{self, Record};

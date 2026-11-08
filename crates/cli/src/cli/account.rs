@@ -14,8 +14,8 @@ use lanpull_core::timeutil;
 use lanpull_store::status;
 use serde::Serialize;
 
-use crate::cli::output::format_rows;
 use crate::cli::Outcome;
+use crate::cli::output::format_rows;
 use crate::manifest_helpers::report_regeneration;
 
 /// Account operations.

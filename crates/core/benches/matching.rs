@@ -13,7 +13,7 @@
 use std::fmt::Write as _;
 use std::hint::black_box;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use lanpull_core::access::{Access, Rule};
 use lanpull_core::config::parse_kv;
 use lanpull_core::glob::Glob;

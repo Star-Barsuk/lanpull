@@ -27,8 +27,8 @@ make setup    # Rust toolchain and the gate tools, including cargo-about
 ## Build
 
 The working tree must be clean: the release is built from a commit, and the
-script refuses uncommitted changes. It runs `make ci-full` (which includes the
-third-party notices check), builds the static binary, and writes the archive.
+script refuses uncommitted changes. It requires the external gate receipt
+(`GATE_RECEIPT`), builds the static binary, and writes the archive.
 Use `make release-check` to rehearse the same staging and checks from a working
 tree without requiring a commit; it still writes `dist/` but never tags or
 publishes.
