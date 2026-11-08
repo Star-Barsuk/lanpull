@@ -9,7 +9,7 @@
 # requires root.
 #
 # Dev tool only. It requires `python3` (to pick a free port and to run the
-# client) and is invoked by `make e2e` after the server binary is built.
+# client) and is invoked by `scripts/gate-e2e.sh` after the server binary is built.
 #
 # Usage: e2e.sh <lanpull-binary> <client-dir>
 

@@ -284,17 +284,16 @@ and is not part of this repository.
 ```bash
 make doctor          # toolchain and service status
 make test-all        # Rust and Python test suites
-make e2e             # loopback end-to-end round of the real server and pull.py
-make check-core      # lanpull-core stays free of the HTTP stack
-make guard-test      # negative safety tests for the privileged scripts
-make cli-test        # operator-style CLI checks against the debug binary
 make dast            # TLS/HTTP probes (needs testssl.sh; dev-only)
 make load / soak     # concurrent loopback clients (periodic)
 make test-musl       # the suite against the musl target (periodic)
-make security        # cargo audit and binary audit
 make release-check   # rehearse the release layout from the working tree
 make release-repro   # build the archive twice and compare the hashes
 ```
+
+`scripts/e2e.sh`, `scripts/gate-e2e.sh`, `scripts/gate-cli-test.sh`,
+`scripts/guard_test.sh`, and `scripts/check-core.sh` remain project tests and
+are invoked by the private gate.
 
 `make setup` installs the Rust target. There is intentionally **no hosted CI**;
 the release workflow requires an external gate receipt (`GATE_RECEIPT`).

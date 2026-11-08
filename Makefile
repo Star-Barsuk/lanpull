@@ -57,14 +57,13 @@ UNINSTALL_CMD = $(SCRIPTS)/uninstall.sh --binary "$(LANPULL)" --unit "$(UNIT)" \
 	--service "$(SERVICE)"
 
 .PHONY: help doctor setup build build-debug install uninstall wipe \
-        clean distclean confirm check-build-tools check-core guard-test cli-test e2e dast load soak \
-        test-musl client-ci client-check test-all \
-        secrets docs-check lint-whitespace check-git
+        clean distclean confirm check-build-tools dast load soak \
+        test-musl client-check test-all lint-whitespace check-git
 
 help: ## Show available targets
 	@$(SCRIPTS)/help.sh
 
-doctor: ## Print the toolchain, gate, and optional tool status
+doctor: ## Print the toolchain and optional tool status
 	@printf 'server:\n'
 	@printf '  cargo:    '; $(CARGO) --version
 	@printf '  rustc:    '; $(RUSTC) --version 2>/dev/null || echo missing
@@ -130,18 +129,6 @@ distclean: confirm ## Remove build artifacts and repository runtime leftovers (C
 	$(MAKE) clean
 	$(SCRIPTS)/distclean.sh .
 
-check-core: ## Enforce that lanpull-core stays free of the HTTP stack
-	@$(SCRIPTS)/check-core.sh
-
-guard-test: ## Run negative safety tests for the privileged scripts
-	@$(SCRIPTS)/guard_test.sh
-
-cli-test: ## Run the operator-style CLI contract
-	@$(SCRIPTS)/gate-cli-test.sh
-
-e2e: ## Run the loopback end-to-end round
-	@$(SCRIPTS)/gate-e2e.sh
-
 LOAD_CLIENTS ?= 8
 SOAK_ROUNDS  ?= 3
 load: build ## Run concurrent loopback clients (periodic; not a gate)
@@ -177,27 +164,13 @@ test-musl: check-build-tools ## Run the test suite against the musl target
 
 
 
-security: ## Scan dependencies and the release binary
-	$(CARGO) audit
-	$(CARGO) audit bin $(BINARY)
-
 # --- Client orchestration -------------------------------------------------
-client-ci: ## Run the Python client quality gate
-	@$(MAKE) --no-print-directory -C client ci
-
 client-check: ## Fast static checks on the Python client
 	@$(MAKE) --no-print-directory -C client lint typecheck
 
 test-all: ## Run the Rust and Python test suites
 	@$(CARGO) test --locked --workspace
 	@$(MAKE) --no-print-directory -C client test
-
-# --- Repository-level checks ---------------------------------------------
-secrets: ## Scan the working tree for credentials
-	@$(SCRIPTS)/secret-scan.sh
-
-docs-check: ## Check links, the public/private boundary, and the version
-	@$(SCRIPTS)/docs-check.sh
 
 lint-whitespace: ## Reject whitespace errors in the working diff
 	@git diff --check
