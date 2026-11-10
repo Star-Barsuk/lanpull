@@ -14,5 +14,11 @@ CARGO="${CARGO:-cargo}"
 CARGO_BIN="${CARGO_HOME:-$HOME/.cargo}/bin"
 [ -x "$CARGO_BIN/cargo" ] && CARGO="$CARGO_BIN/cargo"
 
+# Keep this gate's artifacts out of the shared target directory: a concurrent
+# gate can replace target/debug/lanpull while the test is running. Honor an
+# outer CARGO_TARGET_DIR (the hermetic run sets one outside the tree).
+target="${CARGO_TARGET_DIR:-$root/target}/kantei/cli-test"
+export CARGO_TARGET_DIR="$target"
+
 "$CARGO" build --locked
-exec "$root/scripts/cli_test.sh" "$root/target/debug/lanpull"
+exec "$root/scripts/cli_test.sh" "$target/debug/lanpull"
