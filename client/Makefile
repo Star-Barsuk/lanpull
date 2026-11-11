@@ -74,6 +74,7 @@ audit: $(STAMP) ## Audit the development tools for known vulnerabilities
 lock-check: check-tools ## Fail when requirements-dev.txt is stale
 	@tmp=$$(mktemp); expected=$$(mktemp); \
 	trap 'rm -f "$$tmp" "$$expected"' EXIT; \
+	cp requirements-dev.txt "$$tmp"; \
 	$(UV) pip compile --no-header --generate-hashes --python-version $(PYTHON_VERSION) \
 		requirements-dev.in -o "$$tmp" >/dev/null; \
 	sed '1,2d' requirements-dev.txt >"$$expected"; \
