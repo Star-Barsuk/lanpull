@@ -148,7 +148,14 @@ fn ignore_patterns_match() {
 fn duration_parsing() {
     assert_eq!(timeutil::parse_duration_secs("15m").unwrap(), 900);
     assert_eq!(timeutil::parse_duration_secs("1h").unwrap(), 3600);
+    assert_eq!(timeutil::parse_duration_secs("30s").unwrap(), 30);
+    assert_eq!(timeutil::parse_duration_secs("7d").unwrap(), 604_800);
+    assert_eq!(timeutil::parse_duration_secs("1h30m").unwrap(), 5_400);
     assert!(timeutil::parse_duration_secs("nope").is_err());
+    assert!(timeutil::parse_duration_secs("15").is_err(), "a unit is required");
+    assert!(timeutil::parse_duration_secs("15x").is_err(), "unknown unit");
+    assert!(timeutil::parse_duration_secs("999999999999999d").is_err(), "overflow");
+    assert!(timeutil::parse_duration_secs("").is_err());
 }
 
 #[test]

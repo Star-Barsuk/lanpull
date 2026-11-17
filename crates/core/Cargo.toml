@@ -20,7 +20,6 @@ workspace = true
 [dependencies]
 argon2.workspace = true
 hex.workspace = true
-humantime.workspace = true
 rand.workspace = true
 rcgen.workspace = true
 serde.workspace = true
