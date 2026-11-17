@@ -35,32 +35,36 @@ pub fn parse_iso8601(value: &str) -> Result<i64> {
 }
 
 /// Parse a human duration such as `15m`, `30m`, `1h30m`, or `7d` into
-/// seconds. Units are `s`, `m`, `h`, `d`; compound values add up. This is
-/// the whole grammar the server needs: RUSTSEC-2026-0542 flags the
-/// humantime crate unmaintained, and a five-unit parser is smaller than
-/// the advisory.
+/// seconds.
+///
+/// Units are `s`, `m`, `h`, `d`; compound values add up. This is the whole
+/// grammar the server needs: RUSTSEC-2026-0542 flags the humantime crate
+/// unmaintained, and a five-unit parser is smaller than the advisory.
 pub fn parse_duration_secs(value: &str) -> Result<i64> {
     const UNITS: &[(&str, i64)] = &[("s", 1), ("m", 60), ("h", 3_600), ("d", 86_400)];
     let mut total: i64 = 0;
     let mut rest = value.trim();
     let mut matched = false;
     while !rest.is_empty() {
-        let digits = rest.chars().take_while(char::is_ascii_digit).count();
-        if digits == 0 {
-            return Err(Error::Duration(format!("{value}: {rest} is not a duration")));
-        }
-        let number: i64 = rest[..digits]
-            .parse()
-            .map_err(|_| Error::Duration(format!("{value}: number is too large")))?;
-        rest = &rest[digits..];
-        let unit_len = rest.chars().take_while(char::is_ascii_alphabetic).count();
-        if unit_len == 0 {
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        if digits.is_empty() {
             return Err(Error::Duration(format!(
-                "{value}: unit missing after {}",
-                rest
+                "{value}: {rest} is not a duration"
             )));
         }
-        let unit = &rest[..unit_len];
+        let number: i64 = digits
+            .parse()
+            .map_err(|_| Error::Duration(format!("{value}: number is too large")))?;
+        // The prefix was collected from `rest` itself, so stripping it always
+        // succeeds; the lint cannot see that, and indexing would panic on a
+        // multibyte boundary it also cannot rule out.
+        rest = rest.strip_prefix(digits.as_str()).unwrap_or("");
+        let unit: String = rest.chars().take_while(char::is_ascii_alphabetic).collect();
+        if unit.is_empty() {
+            return Err(Error::Duration(format!(
+                "{value}: unit missing after {number}"
+            )));
+        }
         let factor = UNITS
             .iter()
             .find(|(name, _)| *name == unit)
@@ -72,7 +76,7 @@ pub fn parse_duration_secs(value: &str) -> Result<i64> {
         total = total
             .checked_add(term)
             .ok_or_else(|| Error::Duration(format!("{value}: duration is too large")))?;
-        rest = &rest[unit_len..];
+        rest = rest.strip_prefix(unit.as_str()).unwrap_or(rest);
         matched = true;
     }
     if !matched {
