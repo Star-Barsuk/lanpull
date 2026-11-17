@@ -34,10 +34,49 @@ pub fn parse_iso8601(value: &str) -> Result<i64> {
     Ok(parsed.unix_timestamp())
 }
 
-/// Parse a human duration such as `15m`, `30m`, or `7d` into seconds.
+/// Parse a human duration such as `15m`, `30m`, `1h30m`, or `7d` into
+/// seconds. Units are `s`, `m`, `h`, `d`; compound values add up. This is
+/// the whole grammar the server needs: RUSTSEC-2026-0542 flags the
+/// humantime crate unmaintained, and a five-unit parser is smaller than
+/// the advisory.
 pub fn parse_duration_secs(value: &str) -> Result<i64> {
-    let parsed =
-        humantime::parse_duration(value).map_err(|e| Error::Duration(format!("{value}: {e}")))?;
-    i64::try_from(parsed.as_secs())
-        .map_err(|_| Error::Duration(format!("{value}: duration is too large")))
+    const UNITS: &[(&str, i64)] = &[("s", 1), ("m", 60), ("h", 3_600), ("d", 86_400)];
+    let mut total: i64 = 0;
+    let mut rest = value.trim();
+    let mut matched = false;
+    while !rest.is_empty() {
+        let digits = rest.chars().take_while(char::is_ascii_digit).count();
+        if digits == 0 {
+            return Err(Error::Duration(format!("{value}: {rest} is not a duration")));
+        }
+        let number: i64 = rest[..digits]
+            .parse()
+            .map_err(|_| Error::Duration(format!("{value}: number is too large")))?;
+        rest = &rest[digits..];
+        let unit_len = rest.chars().take_while(char::is_ascii_alphabetic).count();
+        if unit_len == 0 {
+            return Err(Error::Duration(format!(
+                "{value}: unit missing after {}",
+                rest
+            )));
+        }
+        let unit = &rest[..unit_len];
+        let factor = UNITS
+            .iter()
+            .find(|(name, _)| *name == unit)
+            .map(|(_, seconds)| seconds)
+            .ok_or_else(|| Error::Duration(format!("{value}: unknown unit {unit}")))?;
+        let term = number
+            .checked_mul(*factor)
+            .ok_or_else(|| Error::Duration(format!("{value}: duration is too large")))?;
+        total = total
+            .checked_add(term)
+            .ok_or_else(|| Error::Duration(format!("{value}: duration is too large")))?;
+        rest = &rest[unit_len..];
+        matched = true;
+    }
+    if !matched {
+        return Err(Error::Duration(format!("{value}: empty")));
+    }
+    Ok(total)
 }
