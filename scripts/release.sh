@@ -2,8 +2,9 @@
 # Copyright (c) 2026 Star-Barsuk
 # SPDX-License-Identifier: MIT
 #
-# Build the release archive. Refuses a dirty tree, requires an external gate
-# receipt, checks that the third-party notices match the dependency graph, and
+# Build the release archive. Refuses a dirty tree, requires a gate receipt
+# that verifies for HEAD (set GATE_RECEIPT to hand over an out-of-tree one),
+# checks that the third-party notices match the dependency graph, and
 # writes dist/lanpull-v<version>.tar.gz plus SHA256SUMS.
 #
 # It does not tag or push: review the archive, then create the annotated tag
@@ -13,7 +14,7 @@
 #
 # `--check` performs the same staging and validation from the working tree
 # (which may be dirty) without requiring a commit. Use it as a release
-# rehearsal; it still requires the external gate receipt and writes dist/.
+# rehearsal; it still requires a verifying gate receipt and writes dist/.
 
 set -eu
 
@@ -61,9 +62,16 @@ else
     [ -z "$(git status --porcelain)" ] || die "the working tree is not clean"
 fi
 
-printf 'release: checking the external gate receipt\n'
-[ -n "${GATE_RECEIPT:-}" ] || die "set GATE_RECEIPT to the private gate receipt before releasing"
-[ -f "$GATE_RECEIPT" ] || die "gate receipt not found: $GATE_RECEIPT"
+printf 'release: verifying the gate receipt\n'
+if [ -n "${GATE_RECEIPT:-}" ]; then
+    # An out-of-tree receipt travels as a file; it must land in place to be
+    # verified against this HEAD.
+    mkdir -p target/kantei
+    install -m644 "$GATE_RECEIPT" target/kantei/latest.json
+fi
+command -v kantei >/dev/null 2>&1 || die "kantei is required to verify the gate receipt"
+kantei receipt verify --for push ||
+    die "the gate receipt does not verify for HEAD; run 'kantei run --receipt' first"
 
 printf 'release: building %s\n' "$target"
 make build

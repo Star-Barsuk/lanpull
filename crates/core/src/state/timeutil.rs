@@ -84,3 +84,71 @@ pub fn parse_duration_secs(value: &str) -> Result<i64> {
     }
     Ok(total)
 }
+
+#[cfg(test)]
+mod tests {
+    // Tests may unwrap and use bare asserts for brevity; production code may not.
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::arithmetic_side_effects
+    )]
+    use super::*;
+
+    #[test]
+    fn parses_single_and_compound_units() {
+        for (value, expected) in [
+            ("15m", 900),
+            ("30s", 30),
+            ("1h", 3_600),
+            ("7d", 604_800),
+            ("1h30m", 5_400),
+            ("1d2h3m4s", 93_784),
+            (" 15m ", 900),
+        ] {
+            assert!(
+                matches!(parse_duration_secs(value), Ok(total) if total == expected),
+                "{value} should parse to {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_durations() {
+        for value in [
+            "",
+            "   ",
+            "nope",
+            "15",
+            "15x",
+            "m",
+            "1h30",
+            "99999999999999999999s",
+        ] {
+            assert!(
+                parse_duration_secs(value).is_err(),
+                "{value:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_duration_overflow() {
+        // 2e14 days fits i64, but times the unit factor overflows it.
+        assert!(parse_duration_secs("200000000000000d").is_err());
+    }
+
+    #[test]
+    fn unix_seconds_round_trip_through_rfc3339() {
+        let epoch = 1_700_000_000;
+        let rendered = iso8601(epoch);
+        assert_eq!(rendered, "2023-11-14T22:13:20Z");
+        assert!(matches!(parse_iso8601(&rendered), Ok(secs) if secs == epoch));
+    }
+
+    #[test]
+    fn now_unix_is_a_plausible_epoch() {
+        assert!(now_unix() > 1_700_000_000, "the clock is past 2023");
+    }
+}

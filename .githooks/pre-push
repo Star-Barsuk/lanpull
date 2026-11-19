@@ -1,0 +1,15 @@
+#!/bin/sh
+# Refuse a push without a valid receipt for HEAD.
+# Installed by the operator once: git config core.hooksPath .githooks
+# A bypass is a policy violation even when this hook is absent.
+set -eu
+
+if [ "${GATE_SKIP_HOOK:-0}" = "1" ]; then
+	echo "pre-push: bypassed by GATE_SKIP_HOOK; this push is unverified" >&2
+	exit 0
+fi
+
+if command -v kantei >/dev/null 2>&1; then
+	exec kantei receipt verify --for push
+fi
+exec "$HOME/.cargo/bin/kantei" receipt verify --for push
