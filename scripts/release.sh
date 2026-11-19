@@ -5,7 +5,7 @@
 # Build the release archive. Refuses a dirty tree, requires a gate receipt
 # that verifies for HEAD (set GATE_RECEIPT to hand over an out-of-tree one),
 # checks that the third-party notices match the dependency graph, and
-# writes dist/lanpull-v<version>.tar.gz plus SHA256SUMS.
+# writes dist/lanpull-v<version>.tar.gz plus a signed SHA256SUMS.
 #
 # It does not tag or push: review the archive, then create the annotated tag
 # with the printed hash in its message.
@@ -17,6 +17,8 @@
 # rehearsal; it still requires a verifying gate receipt and writes dist/.
 
 set -eu
+# The signing tool installs user-local through cargo.
+PATH="$HOME/.cargo/bin:$PATH"
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 root=$(CDPATH='' cd -- "$script_dir/.." && pwd)
@@ -158,6 +160,19 @@ tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 \
     --numeric-owner -C "$dist" -cf "$dist/lanpull-$tag.tar" "lanpull-$tag"
 gzip -n -f "$dist/lanpull-$tag.tar"
 (cd "$dist" && sha256sum "lanpull-$tag.tar.gz" > SHA256SUMS && sha256sum -c SHA256SUMS >/dev/null)
+# Sign the checksum list so a download can be authenticated, not merely
+# checksummed: the checksum file alone travels over the same channel as the
+# archive, and a compromised channel rewrites both. Anyone verifies with the
+# committed release.pub and a standalone rsign; kantei is not involved.
+command -v rsign >/dev/null 2>&1 ||
+    die "rsign is required to sign SHA256SUMS (cargo install --locked rsign2)"
+signing_key=${GATE_SIGNING_KEY:-$HOME/.config/kantei/keys/lanpull-release}
+[ -f "$signing_key/release.key" ] ||
+    die "release key not found at $signing_key/release.key; set GATE_SIGNING_KEY"
+(cd "$dist" && rsign sign -W -s "$signing_key/release.key" -x SHA256SUMS.minisig SHA256SUMS) ||
+    die "signing SHA256SUMS failed"
+(cd "$dist" && rsign verify -p "$root/release.pub" SHA256SUMS) ||
+    die "the SHA256SUMS signature does not verify against release.pub"
 hash=$(cd "$dist" && sha256sum "lanpull-$tag.tar.gz" | cut -d' ' -f1)
 git rev-parse HEAD >"$dist/COMMIT"
 

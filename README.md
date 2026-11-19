@@ -297,6 +297,23 @@ make release-repro   # build the archive twice and compare the hashes
 gate; the dependency rule is contract data (`[forbid]`) enforced by the
 shared `architecture-deps` gate.
 
+## Verifying a release
+
+Every release ships `SHA256SUMS` signed with the minisign key whose public
+half is `release.pub` in this repository. Authenticity needs no kantei and no
+source checkout: a standalone `rsign` verifies the checksum list, and the
+checksum ties the archive to it.
+
+```sh
+# fingerprints: compare the comment of release.pub against this literal
+rsign verify -P RWR0dCo/FGKJq549mWA6GjtI2MGxs+A5gP3pDOky6AVFnYRF4vLDjepr SHA256SUMS
+sha256sum -c SHA256SUMS
+```
+
+Without `rsign`, `sha256sum -c SHA256SUMS` still checks integrity, but a
+checksum file travels over the same channel as the archive and proves nothing
+about who built it.
+
 `make setup` installs the Rust target. There is intentionally **no hosted CI**;
 the release workflow requires an external gate receipt (`GATE_RECEIPT`).
 
