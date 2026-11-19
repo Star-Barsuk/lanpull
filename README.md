@@ -292,9 +292,10 @@ make release-check   # rehearse the release layout from the working tree
 make release-repro   # build the archive twice and compare the hashes
 ```
 
-`scripts/e2e.sh`, `scripts/gate-e2e.sh`, `scripts/gate-cli-test.sh`,
-`scripts/guard_test.sh`, and `scripts/check-core.sh` remain project tests and
-are invoked by the private gate.
+`scripts/e2e.sh`, `scripts/gate-e2e.sh`, `scripts/gate-cli-test.sh`, and
+`scripts/guard_test.sh` remain project tests and are invoked by the private
+gate; the dependency rule is contract data (`[forbid]`) enforced by the
+shared `architecture-deps` gate.
 
 `make setup` installs the Rust target. There is intentionally **no hosted CI**;
 the release workflow requires an external gate receipt (`GATE_RECEIPT`).
