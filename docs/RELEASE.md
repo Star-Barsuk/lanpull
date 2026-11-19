@@ -27,8 +27,14 @@ make setup    # Rust toolchain and the gate tools, including cargo-about
 ## Build
 
 The working tree must be clean: the release is built from a commit, and the
-script refuses uncommitted changes. It requires the external gate receipt
-(`GATE_RECEIPT`), builds the static binary, and writes the archive.
+script refuses uncommitted changes. It requires a gate receipt that verifies
+for HEAD and carries a signature over its digest: take the receipt with
+`GATE_RECEIPT=<path> kantei run --receipt` out of tree and hand it over, or
+run `GATE_SIGNING_KEY=<home>/.config/kantei/keys/lanpull-release kantei run
+--receipt` in place. The public key is committed as `release.pub`, so the
+signature is checkable by anyone; `kantei receipt verify --for release` will
+additionally demand the full catalogue once the excluded-gate policy (dast,
+security-headers, language, licenses-check) is resolved.
 Use `make release-check` to rehearse the same staging and checks from a working
 tree without requiring a commit; it still writes `dist/` but never tags or
 publishes.

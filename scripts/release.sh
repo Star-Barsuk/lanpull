@@ -72,6 +72,11 @@ fi
 command -v kantei >/dev/null 2>&1 || die "kantei is required to verify the gate receipt"
 kantei receipt verify --for push ||
     die "the gate receipt does not verify for HEAD; run 'kantei run --receipt' first"
+# The receipt must be signed (GATE_SIGNING_KEY=<dir> kantei run --receipt);
+# the public key is committed as release.pub, so anyone can check it.
+if grep -qE '"signature" *: *null|"signature":null' target/kantei/latest.json; then
+    die "the gate receipt is unsigned; take it with GATE_SIGNING_KEY=<dir> kantei run --receipt"
+fi
 
 printf 'release: building %s\n' "$target"
 make build
