@@ -322,8 +322,9 @@ the release workflow requires an external gate receipt (`GATE_RECEIPT`).
 ## 📦 Releases
 
 Release archives are built from a tagged commit with `make release` and
-attached to a GitHub Release (draft first). The contents, checksum, and
-verification steps are in [docs/RELEASE.md](docs/RELEASE.md).
+attached to a GitHub Release (draft first). The latest release is v1.0.0; the
+contents, checksum, and verification steps are in
+[docs/RELEASE.md](docs/RELEASE.md).
 
 ---
 
