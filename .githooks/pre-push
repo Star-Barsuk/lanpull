@@ -4,8 +4,8 @@
 # A bypass is a policy violation even when this hook is absent.
 set -eu
 
-if [ "${GATE_SKIP_HOOK:-0}" = "1" ]; then
-	echo "pre-push: bypassed by GATE_SKIP_HOOK; this push is unverified" >&2
+if [ "${KANTEI_SKIP_HOOK:-${GATE_SKIP_HOOK:-0}}" = "1" ]; then
+	echo "pre-push: bypassed by KANTEI_SKIP_HOOK; this push is unverified" >&2
 	exit 0
 fi
 
