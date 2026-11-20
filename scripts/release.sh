@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 #
 # Build the release archive. Refuses a dirty tree, requires a gate receipt
-# that verifies for HEAD (set GATE_RECEIPT to hand over an out-of-tree one),
+# that verifies for HEAD (set KANTEI_RECEIPT to hand over an out-of-tree one),
 # checks that the third-party notices match the dependency graph, and
 # writes dist/lanpull-v<version>.tar.gz plus a signed SHA256SUMS.
 #
@@ -65,19 +65,19 @@ else
 fi
 
 printf 'release: verifying the gate receipt\n'
-if [ -n "${GATE_RECEIPT:-}" ]; then
+if [ -n "${KANTEI_RECEIPT:-${GATE_RECEIPT:-}}" ]; then
     # An out-of-tree receipt travels as a file; it must land in place to be
     # verified against this HEAD.
     mkdir -p target/kantei
-    install -m644 "$GATE_RECEIPT" target/kantei/latest.json
+    install -m644 "${KANTEI_RECEIPT:-$GATE_RECEIPT}" target/kantei/latest.json
 fi
 command -v kantei >/dev/null 2>&1 || die "kantei is required to verify the gate receipt"
 kantei receipt verify --for push ||
     die "the gate receipt does not verify for HEAD; run 'kantei run --receipt' first"
-# The receipt must be signed (GATE_SIGNING_KEY=<dir> kantei run --receipt);
+# The receipt must be signed (KANTEI_SIGNING_KEY=<dir> kantei run --receipt);
 # the public key is committed as release.pub, so anyone can check it.
 if grep -qE '"signature" *: *null|"signature":null' target/kantei/latest.json; then
-    die "the gate receipt is unsigned; take it with GATE_SIGNING_KEY=<dir> kantei run --receipt"
+    die "the gate receipt is unsigned; take it with KANTEI_SIGNING_KEY=<dir> kantei run --receipt"
 fi
 
 printf 'release: building %s\n' "$target"
@@ -166,9 +166,9 @@ gzip -n -f "$dist/lanpull-$tag.tar"
 # committed release.pub and a standalone rsign; kantei is not involved.
 command -v rsign >/dev/null 2>&1 ||
     die "rsign is required to sign SHA256SUMS (cargo install --locked rsign2)"
-signing_key=${GATE_SIGNING_KEY:-$HOME/.config/kantei/keys/lanpull-release}
+signing_key=${KANTEI_SIGNING_KEY:-${GATE_SIGNING_KEY:-$HOME/.config/kantei/keys/lanpull-release}}
 [ -f "$signing_key/release.key" ] ||
-    die "release key not found at $signing_key/release.key; set GATE_SIGNING_KEY"
+    die "release key not found at $signing_key/release.key; set KANTEI_SIGNING_KEY"
 (cd "$dist" && rsign sign -W -s "$signing_key/release.key" -x SHA256SUMS.minisig SHA256SUMS) ||
     die "signing SHA256SUMS failed"
 (cd "$dist" && rsign verify -p "$root/release.pub" SHA256SUMS) ||
