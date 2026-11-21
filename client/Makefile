@@ -69,7 +69,9 @@ coverage: $(STAMP) ## Run the client tests with coverage (floor 80%; not a gate)
 	$(PYTEST) --cov=pull --cov-report=term-missing --cov-fail-under=80
 
 audit: $(STAMP) ## Audit the development tools for known vulnerabilities
-	$(PIP_AUDIT) -r requirements-dev.txt
+	# --disable-pip: no pip resolution and no auto-upgrade, so the audit is
+	# offline-safe (the hermetic gate has no network) and reproducible.
+	$(PIP_AUDIT) --disable-pip -r requirements-dev.txt
 
 lock-check: check-tools ## Fail when requirements-dev.txt is stale
 	@tmp=$$(mktemp); expected=$$(mktemp); \
